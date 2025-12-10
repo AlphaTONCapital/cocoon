@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 # cocoon-launch - COCOON node launcher (worker/proxy/client/key-manager, QEMU or local)
+import argparse
+import configparser
+import functools
 import os
 import re
-import sys
-import argparse
 import shutil
-import tempfile
-import subprocess
-import configparser
 import signal
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass, field
-from typing import Dict
+from enum import Enum
 from pathlib import Path
+from typing import Dict
 
 
 def run(cmd, **kwargs):
@@ -203,6 +205,44 @@ class Config:
 
         return vars
 
+class CPUVendor(Enum):
+    Intel = 1,
+    AMD = 2,
+
+@functools.cache
+def this_cpu_vendor() -> CPUVendor:
+    s = popen(["grep -m1 vendor_id /proc/cpuinfo | awk '{printf $3}'"], shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, stderr = s.communicate ()
+    vendor_id = stdout.strip ()
+
+    match vendor_id:
+        case b'GenuineIntel':
+            return CPUVendor.Intel
+
+        case b'AuthenticAMD':
+            return CPUVendor.AMD
+
+    raise RuntimeError (f"Uknown CPUVendor: {vendor_id} STDOUT:'{stdout}', STDERR:'{stderr}'")
+
+def qemu_confidential_guest_support(cpu_vendor : CPUVendor) -> str:
+    match cpu_vendor:
+        case CPUVendor.Intel:
+            return "tdx"
+
+        case CPUVendor.AMD:
+            return "sev0"
+
+    raise RuntimeError (f"Unknown CPUVendor: {cpu_vendor}")
+
+def qemu_tee_object (cpu_vendor : CPUVendor) -> list[str]:
+    match cpu_vendor:
+        case CPUVendor.Intel:
+            return ['-object', '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}']
+
+        case CPUVendor.AMD:
+            return ['-object', '{"qom-type":"sev-snp-guest","id":"sev0","cbitpos":51,"reduced-phys-bits":1}']
+
+    raise RuntimeError (f"Unknown CPUVendor: {cpu_vendor}")
 
 def load_config_from_file(cli_args) -> Config:
     ini = configparser.ConfigParser()
@@ -590,12 +630,15 @@ def run_qemu(cfg: Config):
     if not ovmf.exists():
         sys.exit(f'ERROR: OVMF.fd not found: {ovmf}')
 
-    machine = 'q35,kernel-irqchip=split,memory-backend=mem0'
-    if not cfg.no_tee:
-        machine += ',confidential-guest-support=tdx'
+    cpu_vendor = this_cpu_vendor ()
 
-    tdx_obj = [] if cfg.no_tee else ['-object',
-                                     '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}']
+    machine = 'q35,kernel-irqchip=split,memory-backend=mem0'
+    tee_obj = []
+
+    if not cfg.no_tee:
+        machine += ',confidential-guest-support={0}'.format(qemu_confidential_guest_support(cpu_vendor))
+        tee_obj = qemu_tee_object (cpu_vendor)
+
     gpu_cmd = ['-device', f'vfio-pci,host={cfg.gpu},bus=pci.0,iommufd=iommufd0'] if cfg.gpu else []
     tar_cmd = ['-drive', f'readonly=on,file={model_tar_file},id=drivecache,if=none,index=3,werror=report',
                '-device', 'virtio-blk-pci,drive=drivecache,serial=model-tar',
@@ -607,7 +650,7 @@ def run_qemu(cfg: Config):
             '-bios', str(ovmf),
             '-accel', 'kvm', '-cpu', 'host', '-smp', '32',
             '-vga', 'none',
-            *tdx_obj,
+            *tee_obj,
             '-object', 'memory-backend-ram,id=mem0,size=100G',
             '-device', f'vhost-vsock-pci,guest-cid={vsock_cid}',
             '-object', 'iommufd,id=iommufd0',
