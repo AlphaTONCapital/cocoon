@@ -110,7 +110,7 @@ class Config:
     ssh_port: int | None = None
     vsock_cid: int | None = None
     tcp_ports: list[int] = field(default_factory=list)
-    no_tdx: bool = False
+    no_tee: bool = False
 
     # Extra
     extra_vars: Dict[str, str] = field(default_factory=dict)
@@ -133,7 +133,7 @@ class Config:
             ('TON configs', ['ton_config_base', 'ton_config']),
             ('Paths', ['image_dir', 'build_dir', 'local_run_dir', 'model_tar_path', 'prepared_spec_dir']),
             ('Model', ['model_commit', 'model_verity_hash']),
-            ('QEMU/hardware', ['gpu', 'persistent', 'ssh_port', 'vsock_cid', 'tcp_ports', 'no_tdx']),
+            ('QEMU/hardware', ['gpu', 'persistent', 'ssh_port', 'vsock_cid', 'tcp_ports', 'no_tee']),
             ('Extra', ['prepare_only', 'print_only', 'skip_build', 'just_build']),
         ]
 
@@ -284,7 +284,7 @@ def load_config_from_file(cli_args) -> Config:
         persistent=get('persistent', f'persistent-{node_type}-{instance}.img'),
         ssh_port=getint('ssh_port', None),
         vsock_cid=getint('vsock_cid', None),
-        no_tdx=cli_args.no_tdx,
+        no_tee=cli_args.no_tee,
         # Extra
         prepare_only=cli_args.prepare_only,
         print_only=cli_args.print_only,
@@ -591,10 +591,10 @@ def run_qemu(cfg: Config):
         sys.exit(f'ERROR: OVMF.fd not found: {ovmf}')
 
     machine = 'q35,kernel-irqchip=split,memory-backend=mem0'
-    if not cfg.no_tdx:
+    if not cfg.no_tee:
         machine += ',confidential-guest-support=tdx'
 
-    tdx_obj = [] if cfg.no_tdx else ['-object',
+    tdx_obj = [] if cfg.no_tee else ['-object',
                                      '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}']
     gpu_cmd = ['-device', f'vfio-pci,host={cfg.gpu},bus=pci.0,iommufd=iommufd0'] if cfg.gpu else []
     tar_cmd = ['-drive', f'readonly=on,file={model_tar_file},id=drivecache,if=none,index=3,werror=report',
@@ -857,7 +857,7 @@ def parse_args():
     parser.add_argument('--ssh-port', type=int)
     parser.add_argument('--vsock-cid', type=int)
     parser.add_argument('--tcp', action='append', type=int, default=[])
-    parser.add_argument('--no-tdx', action='store_true')
+    parser.add_argument('--no-tee', action='store_true')
     parser.add_argument('--image-dir', help='Image directory')
     parser.add_argument('--build-dir', help='Build directory (defaults to BUILD_DIR env or cmake-build-default-tdx)')
 
