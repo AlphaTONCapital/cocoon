@@ -234,7 +234,7 @@ td::Result<std::shared_ptr<std::unordered_map<ProductName, TrustChain>>> load_tr
     }
 
     auto cert_chain_prefix = make_product_cert_chain_prefix(PKI_ROOT_DIR, product_name).move_as_ok();
-    TRY_RESULT(trust_chain, TrustChain::parse(cert_chain_prefix));
+    TRY_RESULT(trust_chain, TrustChain::parse(PSTRING () << product_name << ":" <<cert_chain_prefix));
 
     trust_chains->emplace(product_name, std::move(trust_chain));
 

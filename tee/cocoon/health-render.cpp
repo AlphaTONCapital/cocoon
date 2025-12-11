@@ -124,7 +124,7 @@ static int parse_float_as_int(const std::string& s) {
 namespace render_tdx {
 
 std::string read_image_hash() {
-  auto r = metrics::read_proc_file("/etc/tdx/tdx_image_hash.b64", 4096);
+  auto r = metrics::read_proc_file("/etc/tee/tee_image_hash.b64", 4096);
   return r.is_ok() ? r.move_as_ok() : "(not available)";
 }
 

@@ -4,7 +4,7 @@ Wants=vllm.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/router -S 8116@tdx --serialize-info -C /etc/tdx/tdx
+ExecStart=/usr/bin/router -S 8116@tee --serialize-info -C /etc/tee/tee
 StandardOutput=journal+console
 StandardError=journal+console
 
