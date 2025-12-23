@@ -20,6 +20,13 @@
 
 namespace td {
 class SslStream;
+
+// Helper operator<< for UInt types
+template <size_t N>
+td::StringBuilder &operator<<(td::StringBuilder &sb, const td::UInt<N> &value) {
+  return sb << td::hex_encode(value.as_slice());
+}
+
 }  // namespace td
 
 namespace cocoon {
@@ -224,6 +231,24 @@ struct ProxyState {
     }
   }
 };
+
+// Helper function to parse hex string to UInt256/UInt384
+template <typename UIntType>
+td::Result<UIntType> parse_hex_uint(td::Slice hex_str) {
+  if (hex_str.size() != sizeof(UIntType) * 2) {
+    return td::Status::Error(PSLICE() << "Invalid hex string length: expected " << (sizeof(UIntType) * 2)
+                                      << " chars, got " << hex_str.size());
+  }
+
+  TRY_RESULT(bytes, td::hex_decode(hex_str));
+  if (bytes.size() != sizeof(UIntType)) {
+    return td::Status::Error("Invalid decoded hex size");
+  }
+
+  UIntType result;
+  result.as_mutable_slice().copy_from(bytes);
+  return result;
+}
 
 td::StringBuilder &operator<<(td::StringBuilder &sb, const ProxyState &state);
 

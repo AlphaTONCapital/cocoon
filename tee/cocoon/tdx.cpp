@@ -44,11 +44,6 @@ static constexpr size_t MAX_TDX_QUOTE_EXTENSION_SIZE = 32 * 1024;  // 32 KiB har
 
 // TODO: Replace OBJ_* calls with NID_* equivalents for better performance
 namespace td {
-template <size_t N>
-td::StringBuilder &operator<<(td::StringBuilder &sb, const td::UInt<N> &value) {
-  return sb << td::hex_encode(value.as_slice());
-}
-// Helper operator<< for UInt types
 template <size_t N, class T>
 td::StringBuilder &operator<<(td::StringBuilder &sb, const std::array<T, N> &value) {
   return sb << td::format::as_array(value);
