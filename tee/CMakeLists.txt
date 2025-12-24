@@ -26,6 +26,7 @@ set(COCOON_SOURCE
         cocoon/ProxyConfig.h
         cocoon/tdx/tdx.cpp
         cocoon/tdx/tdx.h
+        cocoon/tdx/RATLS.h
         cocoon/sev/ABI.cpp
         cocoon/sev/ABI.h
         cocoon/sev/GuestCTX.cpp
