@@ -9,6 +9,7 @@
 #include "td/actor/actor.h"
 #include "td/utils/Random.h"
 #include "td/utils/SharedSlice.h"
+#include "td/utils/buffer.h"
 #include "td/utils/common.h"
 #include "td/utils/filesystem.h"
 #include "td/db/RocksDb.h"
@@ -350,13 +351,15 @@ void ProxyRunner::load_config(td::Promise<td::Unit> promise) {
     wallet_private_key_ = std::make_unique<td::Ed25519::PrivateKey>(td::SecureString(conf.node_wallet_key_.as_slice()));
     wallet_public_key_.as_slice().copy_from(wallet_private_key_->get_public_key().move_as_ok().as_octet_string());
 
+    if (conf.connect_to_proxy_via_.size() > 0) {
+      TRY_STATUS(connection_to_proxy_via(conf.connect_to_proxy_via_));
+    }
+
     set_number_of_proxy_connections(0, false);
     set_owner_address(std::move(owner_address));
 
     local_image_hash_unverified_ = conf.image_hash_;
-    if (conf.check_worker_hashes_ || !conf.is_test_) {
-      enable_check_worker_hashes();
-    }
+    set_check_image_hashes(conf.check_worker_hashes_ || !conf.is_test_);
     set_http_access_hash(conf.http_access_hash_);
     set_is_test(conf.is_test_);
 
@@ -897,7 +900,7 @@ void ProxyRunner::on_root_contract_config_update(std::shared_ptr<RunnerConfig> c
     initialize_sc(config, ton::BlockIdExt{}, {});
   }
 
-  if (check_worker_hashes_) {
+  if (check_image_hashes()) {
     for (auto &t : models_) {
       auto it = t.second.connections.begin();
       while (it != t.second.connections.end()) {
@@ -984,7 +987,7 @@ void ProxyRunner::alarm() {
 
   auto r = runner_config();
   if (r->root_contract_ts < (td::int32)std::time(0) - 7200 && !ton_disabled()) {
-    if (check_worker_hashes()) {
+    if (check_image_hashes()) {
       LOG(FATAL) << "cannot download new config for 7200 seconds: ts=" << r->root_contract_ts;
     } else {
       LOG(WARNING) << "cannot download new config for 7200 seconds: ts=" << r->root_contract_ts;
@@ -1122,7 +1125,7 @@ void ProxyRunner::receive_message(TcpClient::ConnectionId connection_id, td::Buf
 
       auto ex_obj = ton::create_tl_object<cocoon_api::client_runQueryEx>(
           std::move(obj->model_name_), std::move(obj->query_), obj->max_coefficient_, obj->max_tokens_, obj->timeout_,
-          obj->request_id_, obj->min_config_version_, 0, false);
+          obj->request_id_, obj->min_config_version_, 0, false, td::Bits256::zero());
       forward_query(connection_id, std::move(ex_obj));
       return;
     };
@@ -1406,12 +1409,23 @@ td::Result<std::shared_ptr<ProxyWorkerConnectionInfo>> ProxyRunner::choose_conne
 
 void ProxyRunner::forward_query(TcpClient::ConnectionId client_connection_id,
                                 ton::tl_object_ptr<cocoon_api::client_runQueryEx> req) {
-  auto client = static_cast<ProxyInboundClientConnection *>(get_connection(client_connection_id))->client_info();
+  auto client_tcp_connection = static_cast<ProxyInboundClientConnection *>(get_connection(client_connection_id));
+  auto client = static_cast<ProxyInboundClientConnection *>(client_tcp_connection)->client_info();
 
   auto client_request_id = req->request_id_;
   auto fail = [&](td::Status S) {
-    auto res = cocoon::create_serialize_tl_object<cocoon_api::client_queryAnswerError>(
-        S.code(), S.message().str(), client_request_id, ton::create_tl_object<cocoon_api::tokensUsed>(0, 0, 0, 0, 0));
+    td::BufferSlice res;
+    auto client_proto_version = client_tcp_connection->proto_version();
+    if (client_proto_version > 0) {
+      res = cocoon::create_serialize_tl_object<cocoon_api::client_queryAnswerErrorEx>(
+          client_request_id, S.code(), S.message().str(), 1,
+          ton::create_tl_object<cocoon_api::client_queryFinalInfo>(
+              (client_proto_version >= 2 ? 2 : 0), ton::create_tl_object<cocoon_api::tokensUsed>(0, 0, 0, 0, 0), "", "",
+              td::Clocks::system(), td::Clocks::system(), td::Clocks::system(), td::Clocks::system()));
+    } else {
+      res = cocoon::create_serialize_tl_object<cocoon_api::client_queryAnswerError>(
+          S.code(), S.message().str(), client_request_id, ton::create_tl_object<cocoon_api::tokensUsed>(0, 0, 0, 0, 0));
+    }
     send_message_to_connection(client_connection_id, std::move(res));
     stats_->requests_rejected++;
   };
@@ -1429,6 +1443,14 @@ void ProxyRunner::forward_query(TcpClient::ConnectionId client_connection_id,
   }
   if (!client->allow_queries()) {
     return fail(td::Status::Error(ton::ErrorCode::notready, "client is closing"));
+  }
+
+  td::Bits256 encrypted_with = td::Bits256::zero();
+  if ((req->flags_ & 2) && !req->public_key_.is_zero()) {
+    if (!get_private_key(req->public_key_, encrypted_with)) {
+      return fail(
+          td::Status::Error(ton::ErrorCode::error, PSTRING() << "unknown public key " << req->public_key_.to_hex()));
+    }
   }
 
   auto to_reserve = adjust_tokens(req->max_tokens_ + req->query_.size(), req->max_coefficient_, 10000);
@@ -1454,7 +1476,6 @@ void ProxyRunner::forward_query(TcpClient::ConnectionId client_connection_id,
   worker_connection->forwarded_query();
   worker_connection->info->forwarded_query();
 
-  auto client_tcp_connection = static_cast<ProxyInboundClientConnection *>(get_connection(client_connection_id));
   auto worker_tcp_connection =
       static_cast<ProxyInboundClientConnection *>(get_connection(worker_connection->connection_id));
 
@@ -1465,8 +1486,8 @@ void ProxyRunner::forward_query(TcpClient::ConnectionId client_connection_id,
   auto request = td::actor::create_actor<ProxyRunningRequest>(
                      PSTRING() << "request_" << client_request_id.to_hex() << "_" << request_id.to_hex(), request_id,
                      client_request_id, client_connection_id, client_tcp_connection->proto_version(), client,
-                     worker_tcp_connection->proto_version(), worker_connection, std::move(req->query_), req->timeout_,
-                     req->enable_debug_, to_reserve, actor_id(this), stats_)
+                     worker_tcp_connection->proto_version(), worker_connection, std::move(req->query_), encrypted_with,
+                     req->timeout_, req->enable_debug_, to_reserve, actor_id(this), stats_)
                      .release();
   CHECK(running_queries_.emplace(request_id, request).second);
 }
@@ -1606,7 +1627,7 @@ std::string ProxyRunner::http_generate_main() {
       if (is_valid) {
         sb << "<span style=\"background-color:Green;\">our hash " << local_image_hash_unverified_.to_hex()
            << " is in root contract</span>";
-      } else if (check_worker_hashes_) {
+      } else if (check_image_hashes()) {
         sb << "<span style=\"background-color:Crimson;\">our hash " << local_image_hash_unverified_.to_hex()
            << " not found in root contract</span>";
       } else {
@@ -1666,13 +1687,14 @@ std::string ProxyRunner::http_generate_main() {
   }
 
   store_wallet_stat(sb);
+  store_known_private_keys(sb);
 
   {
     sb << "<h1>LOCAL CONFIG</h1>\n";
     sb << "<table>\n";
     sb << "<tr><td>root address</td><td>" << address_link(root_contract_address()) << "</td></tr>\n";
     sb << "<tr><td>owner address</td><td>" << address_link(owner_address()) << "</td></tr>\n";
-    sb << "<tr><td>check worker hashes</td><td>" << (check_worker_hashes_ ? "YES" : "NO") << "</td></tr>\n";
+    sb << "<tr><td>check image hashes</td><td>" << (check_image_hashes() ? "YES" : "NO") << "</td></tr>\n";
     sb << "</table>\n";
   }
 
@@ -1747,7 +1769,7 @@ std::string ProxyRunner::http_generate_json_stats() {
     if (cocoon_wallet()) {
       jb.add_element("wallet_balance", cocoon_wallet()->balance());
     }
-    if (check_worker_hashes_ && sc_) {
+    if (check_image_hashes() && sc_) {
       jb.add_element("actual_image_hash",
                      sc_->runner_config()->root_contract_config->has_proxy_hash(local_image_hash_unverified_));
     } else {
@@ -1783,7 +1805,7 @@ std::string ProxyRunner::http_generate_json_stats() {
     jb.start_object("localconfig");
     jb.add_element("root_address", root_contract_address().rserialize(true));
     jb.add_element("owner_address", owner_address().rserialize(true));
-    jb.add_element("check_worker_hashes", check_worker_hashes_);
+    jb.add_element("check_image_hashes", check_image_hashes());
     jb.stop_object();
   }
 

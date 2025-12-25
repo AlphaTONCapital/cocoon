@@ -22,7 +22,7 @@ struct WorkerModel {
 
 class ProxyRunner : public BaseRunner {
  public:
-  ProxyRunner(std::string engine_config_filename) : BaseRunner(std::move(engine_config_filename)) {
+  ProxyRunner(std::string engine_config_filename) : BaseRunner(RunnerRole::Proxy, std::move(engine_config_filename)) {
   }
 
   /* CONST PARAMS */
@@ -71,9 +71,6 @@ class ProxyRunner : public BaseRunner {
   auto active_config_version() const {
     return active_config_version_;
   }
-  bool check_worker_hashes() const {
-    return check_worker_hashes_;
-  }
   const auto &sc() const {
     return sc_;
   }
@@ -82,9 +79,6 @@ class ProxyRunner : public BaseRunner {
   }
 
   /* SIMPLE SETTERS */
-  void enable_check_worker_hashes() {
-    check_worker_hashes_ = true;
-  }
   void set_owner_address(block::StdAddress owner_address) {
     owner_address_ = std::move(owner_address);
   }
@@ -236,7 +230,6 @@ class ProxyRunner : public BaseRunner {
   td::int64 is_disabled_until_version_{0};
 
   bool generate_random_private_key_{false};
-  bool check_worker_hashes_{false};
   bool running_withdraw_{false};
   td::uint64 withdraw_request_id_{0};
   bool running_save_state_to_blockchain_{false};

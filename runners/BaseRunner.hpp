@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Ed25519.h"
+#include "auto/tl/cocoon_api.h"
 #include "auto/tl/tonlib_api.h"
 #include "checksum.h"
 #include "common/bitstring.h"
@@ -15,8 +16,10 @@
 #include "td/utils/StringBuilder.h"
 #include "td/utils/Time.h"
 #include "td/utils/UInt.h"
+#include "td/utils/buffer.h"
 #include "td/utils/common.h"
 #include "td/utils/format.h"
+#include "td/utils/port/Clocks.h"
 #include "td/utils/port/IPAddress.h"
 #include "tl/TlObject.h"
 #include "ton/tonlib/tonlib/TonlibClient.h"
@@ -28,6 +31,7 @@
 #include "runners/smartcontracts/RootContractConfig.hpp"
 #include "runners/smartcontracts/SmartContract.hpp"
 #include "runners/smartcontracts/CocoonWallet.hpp"
+#include "cocoon-tl-utils/cocoon-tl-utils.hpp"
 #include "TonlibWrapper.h"
 #include "helpers/Ton.h"
 #include "helpers/SimpleJsonSerializer.hpp"
@@ -48,8 +52,11 @@ enum class ProxyTargetStatus { Connecting, RunningInitialHandshake, Reconnecting
 
 enum class ClientCheckResult { Ok, Delete };
 
+enum class RunnerRole { Worker, Proxy, Client, KeyManager, Unknown };
+
 RemoteAppType remote_app_type_proxy();
 RemoteAppType remote_app_type_worker();
+RemoteAppType remote_app_type_key_manager();
 RemoteAppType remote_app_type_unknown();
 
 using HttpHandler = std::function<void(
@@ -253,6 +260,18 @@ class ProxyTarget {
   td::Timestamp last_ready_at_;
 };
 
+class KeyManagerOutboundConnection : public BaseOutboundConnection {
+ public:
+  KeyManagerOutboundConnection(BaseRunner *runner, const RemoteAppType &remote_app_type,
+                               const td::Bits256 &remote_app_hash, TcpClient::ConnectionId connection_id,
+                               RunnerRole role)
+      : BaseOutboundConnection(runner, remote_app_type, remote_app_hash, connection_id), role_(std::move(role)) {
+  }
+
+ private:
+  RunnerRole role_;
+};
+
 class DelayedAction {
  public:
   virtual ~DelayedAction() = default;
@@ -308,6 +327,12 @@ inline bool rdeserialize(block::StdAddress &addr, td::Slice s, bool is_tesnet) {
 
   return true;
 }
+
+struct BaseRunnerPrivateKey {
+  td::Bits256 private_key;
+  td::Bits256 public_key;
+  td::int32 expire_at;
+};
 
 class BaseRunner : public td::actor::Actor {
  private:
@@ -394,6 +419,9 @@ class BaseRunner : public td::actor::Actor {
   bool rdeserialize(block::StdAddress &addr, td::Slice s) const {
     return cocoon::rdeserialize(addr, s, is_testnet());
   }
+  bool check_image_hashes() const {
+    return check_image_hashes_;
+  }
 
   /* Setters */
   void set_fake_tdx(bool value) {
@@ -436,9 +464,13 @@ class BaseRunner : public td::actor::Actor {
   void set_is_test(bool value) {
     is_test_ = value;
   }
+  void set_check_image_hashes(bool value) {
+    check_image_hashes_ = value;
+  }
 
   /* main */
-  BaseRunner(std::string engine_config_filename) : engine_config_filename_(std::move(engine_config_filename)) {
+  BaseRunner(RunnerRole role, std::string engine_config_filename)
+      : role_(std::move(role)), engine_config_filename_(std::move(engine_config_filename)) {
   }
 
   /* initialize */
@@ -591,6 +623,27 @@ class BaseRunner : public td::actor::Actor {
       delayed_action_queue_.emplace(std::make_unique<DelayedActionRunnable<F>>(at, std::move(run)));
     }
   }
+  void gc_cocoon_pk() {
+    auto it = cocoon_pk_map_.begin();
+    while (it != cocoon_pk_map_.end()) {
+      if (it->second->expire_at < td::Clocks::system()) {
+        it = cocoon_pk_map_.erase(it);
+      } else {
+        it++;
+      }
+    }
+  }
+  void get_private_keys_from_key_manager();
+  void got_private_keys_from_key_manager(td::BufferSlice R);
+  bool get_private_key(const td::Bits256 &pub, td::Bits256 &to) {
+    auto it = cocoon_pk_map_.find(pub);
+    if (it != cocoon_pk_map_.end()) {
+      to = it->second->private_key;
+      return true;
+    } else {
+      return false;
+    }
+  }
 
   /* handlers*/
   virtual void receive_message(TcpClient::ConnectionId connection_id, td::BufferSlice query) {
@@ -678,6 +731,7 @@ class BaseRunner : public td::actor::Actor {
   void store_wallet_stat(SimpleJsonSerializer &jb);
   void store_root_contract_stat(td::StringBuilder &sb);
   void store_root_contract_stat(SimpleJsonSerializer &jb);
+  void store_known_private_keys(td::StringBuilder &sb);
 
   void iterate_check_map(auto &map) {
     auto it = map.begin();
@@ -704,6 +758,9 @@ class BaseRunner : public td::actor::Actor {
   }
 
  private:
+  const RunnerRole role_;
+  bool check_image_hashes_{true};
+
   std::shared_ptr<RunnerConfig> runner_config_;
   td::int32 root_contract_ts_{0};
   td::actor::ActorOwn<TcpClient> client_;
@@ -753,6 +810,13 @@ class BaseRunner : public td::actor::Actor {
   bool fake_tdx_{false};
   std::string ton_pseudo_config_;
   std::string http_access_hash_;
+
+  td::Timestamp next_key_manager_request_at_;
+  td::IPAddress key_manager_addr_;
+  TcpClient::ListeningSocketId key_manager_socket_id_{0};
+  TcpClient::ConnectionId key_manager_connection_id_{0};
+  std::map<td::Bits256, std::shared_ptr<BaseRunnerPrivateKey>> cocoon_pk_map_;
+  std::unique_ptr<KeyManagerOutboundConnection> key_manager_connection_;
 
   std::map<std::string, HttpHandler> custom_http_handlers_;
 };

@@ -13,6 +13,7 @@
 #include "td/actor/PromiseFuture.h"
 #include "td/actor/actor.h"
 #include "td/utils/Random.h"
+#include "td/utils/SharedSlice.h"
 #include "td/utils/Status.h"
 #include "td/utils/Time.h"
 #include "td/utils/UInt.h"
@@ -74,6 +75,12 @@ RemoteAppType remote_app_type_unknown() {
 RemoteAppType remote_app_type_worker() {
   RemoteAppType t;
   t.info = "worker";
+  return t;
+}
+
+RemoteAppType remote_app_type_key_manager() {
+  RemoteAppType t;
+  t.info = "keymanager";
   return t;
 }
 
@@ -301,6 +308,8 @@ void BaseRunner::initialize_rpc_server(td::Promise<td::Unit> promise) {
     LOG(INFO) << "using proxy " << connection_to_proxy_via_;
     td::actor::send_closure(client_, &TcpClient::add_connection_to_remote_app_type_rule, remote_app_type_proxy(),
                             std::make_shared<TcpConnectionType>(TcpConnectionSocks5(connection_to_proxy_via_)));
+    td::actor::send_closure(client_, &TcpClient::add_connection_to_remote_app_type_rule, remote_app_type_key_manager(),
+                            std::make_shared<TcpConnectionType>(TcpConnectionSocks5(connection_to_proxy_via_)));
   } else {
     LOG(INFO) << "using " << (fake_tdx_ ? "fake" : "real") << " tdx-tls connection";
     auto cert_and_key = tdx::generate_cert_and_key(nullptr);
@@ -308,6 +317,8 @@ void BaseRunner::initialize_rpc_server(td::Promise<td::Unit> promise) {
     tdx::PolicyConfig conf{};  // allow all
     auto policy = tdx::Policy::make(tdx_interface, conf);
     td::actor::send_closure(client_, &TcpClient::add_connection_to_remote_app_type_rule, remote_app_type_proxy(),
+                            std::make_shared<TcpConnectionType>(TcpConnectionTls(cert_and_key, policy)));
+    td::actor::send_closure(client_, &TcpClient::add_connection_to_remote_app_type_rule, remote_app_type_key_manager(),
                             std::make_shared<TcpConnectionType>(TcpConnectionTls(cert_and_key, policy)));
   }
   promise.set_value(td::Unit());
@@ -501,6 +512,38 @@ void BaseRunner::inbound_connection_ready(TcpClient::ConnectionId connection_id,
 void BaseRunner::outbound_connection_ready(TcpClient::ConnectionId connection_id, TcpClient::TargetId target_id,
                                            const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash) {
   LOG(INFO) << "outbound connection ready: connection_id=" << connection_id << " target_id=" << target_id;
+
+  if (remote_app_type == remote_app_type_key_manager()) {
+    if (check_image_hashes()) {
+      if (!runner_config_ || !runner_config_->root_contract_config) {
+        fail_connection(connection_id, td::Status::Error("cannot verify key manager connection"));
+        return;
+      }
+      if (runner_config_->root_contract_config->key_manager_image_hash() != remote_app_hash) {
+        fail_connection(connection_id, td::Status::Error("wrong key manager image hash"));
+        return;
+      }
+    }
+
+    if (target_id != key_manager_socket_id_) {
+      fail_connection(connection_id, td::Status::Error("wrong key manager target id"));
+      return;
+    }
+
+    if (key_manager_connection_id_ > 0) {
+      fail_connection(key_manager_connection_id_, td::Status::Error("created newer connection"));
+    }
+
+    key_manager_connection_id_ = connection_id;
+    auto conn =
+        std::make_unique<KeyManagerOutboundConnection>(this, remote_app_type, remote_app_hash, connection_id, role_);
+
+    auto it2 = all_connections_.emplace(connection_id, std::move(conn)).first;
+    LOG(DEBUG) << "sending connected to created outbound connection";
+    it2->second->start_up();
+    return;
+  }
+
   auto it = proxy_targets_.find(target_id);
   if (it == proxy_targets_.end()) {
     LOG(INFO) << "failing created outbound connection: unknown proxy target " << target_id;
@@ -644,9 +687,17 @@ void BaseRunner::alarm() {
     next_root_contract_state_update_at_ = td::Timestamp::in(td::Random::fast(30.0, 60.0));
     update_root_contract_state().start().detach("update_root_contract_state");
   }
+  gc_cocoon_pk();
+  if (is_initialized() && next_key_manager_request_at_.is_in_past()) {
+    if (role_ == RunnerRole::Proxy || role_ == RunnerRole::Worker) {
+      get_private_keys_from_key_manager();
+    }
+    next_key_manager_request_at_ = td::Timestamp::in(td::Random::fast(60.0, 120.0));
+  }
   alarm_timestamp() = td::Timestamp::in(td::Random::fast(1.0, 2.0));
   alarm_timestamp().relax(next_monitor_at_);
   alarm_timestamp().relax(next_root_contract_state_update_at_);
+  alarm_timestamp().relax(next_key_manager_request_at_);
   if (delayed_action_queue_.size() > 0) {
     alarm_timestamp().relax(delayed_action_queue_.top()->at());
   }
@@ -685,6 +736,86 @@ td::actor::Task<td::Unit> BaseRunner::update_root_contract_state() {
     set_root_contract_config(std::move(val), ts);
   }
   co_return td::Unit();
+}
+
+void BaseRunner::get_private_keys_from_key_manager() {
+  if (!is_initialized()) {
+    return;
+  }
+
+  if (role_ != RunnerRole::Worker && role_ != RunnerRole::Proxy) {
+    return;
+  }
+
+  auto conf = runner_config_;
+  if (!conf || !conf->root_contract_config) {
+    return;
+  }
+
+  auto fail = [&]() {
+    if (key_manager_socket_id_ > 0) {
+      td::actor::send_closure(client_, &TcpClient::del_outbound_address, key_manager_socket_id_);
+      key_manager_socket_id_ = 0;
+      key_manager_addr_ = td::IPAddress();
+      if (key_manager_connection_id_ > 0) {
+        fail_connection(key_manager_connection_id_, td::Status::Error("closing key manager"));
+        key_manager_connection_id_ = 0;
+      }
+    }
+  };
+
+  auto key_manager_addr = conf->root_contract_config->key_manager_address();
+  if (!key_manager_addr.is_valid()) {
+    return fail();
+  }
+  if (key_manager_addr != key_manager_addr_) {
+    fail();
+    key_manager_addr_ = key_manager_addr;
+    key_manager_socket_id_ = generate_unique_uint64();
+
+    td::actor::send_closure(client_, &TcpClient::add_outbound_address, key_manager_socket_id_, key_manager_addr,
+                            remote_app_type_key_manager());
+  }
+
+  if (key_manager_connection_id_ > 0) {
+    td::BufferSlice req;
+    if (role_ == RunnerRole::Proxy) {
+      req = cocoon::create_serialize_tl_object<cocoon_api::keyManager_getProxyPrivateKeys>(0);
+    } else if (role_ == RunnerRole::Worker) {
+      req = cocoon::create_serialize_tl_object<cocoon_api::keyManager_getWorkerPrivateKeys>(0);
+    } else {
+      return;
+    }
+
+    send_query_to_connection(key_manager_connection_id_, "get_private_keys", std::move(req), td::Timestamp::in(60.0),
+                             [runner = this](td::Result<td::BufferSlice> R) mutable {
+                               if (R.is_ok()) {
+                                 runner->got_private_keys_from_key_manager(R.move_as_ok());
+                               }
+                             });
+  }
+}
+
+void BaseRunner::got_private_keys_from_key_manager(td::BufferSlice R) {
+  auto R2 = cocoon::fetch_tl_object<cocoon_api::keyManager_privateKeys>(std::move(R), true);
+  if (R2.is_error()) {
+    LOG(WARNING) << "failed to parse answer from key manager: " << R2.move_as_error();
+  } else {
+    auto res = R2.move_as_ok();
+    for (auto &k : res->keys_) {
+      td::Ed25519::PrivateKey pk(td::SecureString(k->private_key_.as_slice()));
+      td::Bits256 pub;
+      pub.as_slice().copy_from(pk.get_public_key().move_as_ok().as_octet_string().as_slice());
+
+      if (cocoon_pk_map_.count(pub) == 0) {
+        auto P = std::make_unique<BaseRunnerPrivateKey>();
+        P->private_key = k->private_key_;
+        P->public_key = pub;
+        P->expire_at = k->valid_until_utime_;
+        cocoon_pk_map_.emplace(pub, std::move(P));
+      }
+    }
+  }
 }
 
 /*
@@ -1098,6 +1229,15 @@ void BaseRunner::store_root_contract_stat(SimpleJsonSerializer &jb) {
   if (conf) {
     conf->root_contract_config->store_stat(this, jb);
   }
+}
+
+void BaseRunner::store_known_private_keys(td::StringBuilder &sb) {
+  sb << "<h1>KNOWN PRIVATE KEYS</h1>\n";
+  sb << "<table>\n";
+  for (auto &k : cocoon_pk_map_) {
+    sb << "<tr><td>" << k.first.to_hex() << "</td><td>" << k.second->expire_at << "</td></tr>\n";
+  }
+  sb << "</table>\n";
 }
 
 }  // namespace cocoon

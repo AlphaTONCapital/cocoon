@@ -32,7 +32,7 @@ void ProxyInboundWorkerConnection::receive_handshake_query(td::BufferSlice messa
 
 void ProxyInboundWorkerConnection::receive_connect_to_proxy_query(td::BufferSlice query,
                                                                   td::Promise<td::BufferSlice> promise) {
-  if (runner()->check_worker_hashes()) {
+  if (runner()->check_image_hashes()) {
     if (!runner()->sc()->runner_config()->root_contract_config->has_worker_hash(remote_app_hash())) {
       return promise.set_error(td::Status::Error(
           ton::ErrorCode::protoviolation, PSTRING() << "invalid worker image hash " << remote_app_hash().to_hex()));
@@ -57,7 +57,7 @@ void ProxyInboundWorkerConnection::receive_connect_to_proxy_query(td::BufferSlic
   if (obj->params_->proxy_cnt_ < 1) {
     return promise.set_error(td::Status::Error(ton::ErrorCode::protoviolation, "invalid proxy_cnt value"));
   }
-  if (runner()->check_worker_hashes()) {
+  if (runner()->check_image_hashes()) {
     if (!runner()->sc()->runner_config()->root_contract_config->has_model_hash(
             td::sha256_bits256(obj->params_->model_))) {
       return promise.set_error(td::Status::Error(ton::ErrorCode::protoviolation,

@@ -179,17 +179,13 @@ void ClientRunner::load_config(td::Promise<td::Unit> promise) {
     if (conf.connect_to_proxy_via_.size() > 0) {
       TRY_STATUS(connection_to_proxy_via(conf.connect_to_proxy_via_));
     }
-    if (conf.check_proxy_hashes_ || !conf.is_test_) {
-      set_fake_tdx(false);
-      enable_check_proxy_hash();
-    } else {
-      set_fake_tdx(true);
-    }
+
+    set_check_image_hashes(conf.check_proxy_hashes_ || !conf.is_test_);
+    set_fake_tdx(!check_image_hashes());
     set_secret_string(td::SecureString(conf.secret_string_));
     set_number_of_proxy_connections(conf.proxy_connections_, true);
     set_owner_address(owner_address);
     set_http_access_hash(conf.http_access_hash_);
-    set_fake_tdx(!check_proxy_hash_);
     set_is_test(conf.is_test_);
     return td::Status::OK();
   }();
@@ -603,7 +599,7 @@ std::string ClientRunner::http_generate_main() {
     sb << "<table>\n";
     sb << "<tr><td>root address</td><td>" << address_link(root_contract_address()) << "</td></tr>\n";
     sb << "<tr><td>owner address</td><td>" << address_link(owner_address()) << "</td></tr>\n";
-    sb << "<tr><td>check proxy hash</td><td>" << (check_proxy_hash_ ? "YES" : "NO") << "</td></tr>\n";
+    sb << "<tr><td>check proxy hash</td><td>" << (check_image_hashes() ? "YES" : "NO") << "</td></tr>\n";
     sb << "</table>\n";
   }
 
@@ -673,7 +669,7 @@ std::string ClientRunner::http_generate_json_stats() {
     jb.start_object("localconf");
     jb.add_element("root_address", root_contract_address().rserialize(true));
     jb.add_element("owner_address", owner_address().rserialize(true));
-    jb.add_element("check_proxy_hash", check_proxy_hash_);
+    jb.add_element("check_image_hashes", check_image_hashes());
     jb.stop_object();
   }
 

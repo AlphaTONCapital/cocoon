@@ -4,6 +4,7 @@
 #include "auto/tl/cocoon_api.h"
 #include "checksum.h"
 #include "cocoon-tl-utils/cocoon-tl-utils.hpp"
+#include "common/bitstring.h"
 #include "errorcode.h"
 #include "runners/helpers/HttpSender.hpp"
 
@@ -118,9 +119,7 @@ void WorkerRunner::load_config(td::Promise<td::Unit> promise) {
     TRY_STATUS(connection_to_proxy_via(conf.connect_to_proxy_via_));
 
     local_image_hash_unverified_ = conf.image_hash_;
-    if (conf.check_proxy_hashes_ || !conf.is_test_) {
-      enable_check_proxy_hash();
-    }
+    set_check_image_hashes(conf.check_proxy_hashes_ || !conf.is_test_);
 
     TRY_STATUS(create_http_client(conf.forward_requests_to_));
     set_model_name(conf.model_name_);
@@ -253,7 +252,7 @@ void WorkerRunner::alarm() {
     close_all_connections();
     params_version_ = runner_config()->root_contract_config->params_version();
   }
-  if (need_check_proxy_hash()) {
+  if (check_image_hashes()) {
     auto c = runner_config();
     if (c) {
       CHECK(c->root_contract_config->has_worker_hash(local_image_hash_unverified_));
@@ -328,7 +327,7 @@ void WorkerRunner::receive_message(TcpClient::ConnectionId connection_id, td::Bu
       auto obj = fetch_tl_object<cocoon_api::proxy_runQuery>(query, true).move_as_ok();
       auto ex_obj = ton::create_tl_object<cocoon_api::proxy_runQueryEx>(
           std::move(obj->query_), std::move(obj->signed_payment_), obj->coefficient_, obj->timeout_, obj->request_id_,
-          0, false);
+          0, false, td::Bits256::zero());
       receive_request(*proxy, connection_id, *ex_obj);
     } break;
     case cocoon_api::proxy_runQueryEx::ID: {
@@ -545,7 +544,7 @@ std::string WorkerRunner::http_generate_main() {
       if (is_valid) {
         sb << "<span style=\"background-color:Green;\">our hash " << local_image_hash_unverified_.to_hex()
            << " is in root contract</span>";
-      } else if (need_check_proxy_hash_) {
+      } else if (check_image_hashes()) {
         sb << "<span style=\"background-color:Crimson;\">our hash " << local_image_hash_unverified_.to_hex()
            << " not found in root contract</span>";
       } else {
@@ -559,7 +558,7 @@ std::string WorkerRunner::http_generate_main() {
       bool is_valid = runner_config()->root_contract_config->has_model_hash(td::sha256_bits256(model_name_));
       if (is_valid) {
         sb << "<span style=\"background-color:Green;\">our model " << model_name_ << " is in root contract</span>";
-      } else if (need_check_proxy_hash_) {
+      } else if (check_image_hashes()) {
         sb << "<span style=\"background-color:Crimson;\">our model " << model_name_
            << " not found in root contract</span>";
       } else {
@@ -626,7 +625,7 @@ std::string WorkerRunner::http_generate_main() {
        << " <a href=\"/request/change_coefficient\">change</a></td></tr>\n";
     sb << "<tr><td>max_active_requests</td><td>" << max_active_requests_ << "</td></tr>\n";
     sb << "<tr><td>active_requests</td><td>" << active_requests_ << "</td></tr>\n";
-    sb << "<tr><td>check proxy hash</td><td>" << (need_check_proxy_hash_ ? "YES" : "NO") << "</td></tr>\n";
+    sb << "<tr><td>check proxy hash</td><td>" << (check_image_hashes() ? "YES" : "NO") << "</td></tr>\n";
     sb << "</table>\n";
   }
   store_root_contract_stat(sb);
@@ -669,13 +668,13 @@ std::string WorkerRunner::http_generate_json_stats() {
     if (cocoon_wallet()) {
       jb.add_element("wallet_balance", cocoon_wallet()->balance());
     }
-    if (need_check_proxy_hash_ && runner_config()) {
+    if (check_image_hashes() && runner_config()) {
       jb.add_element("actual_image_hash",
                      runner_config()->root_contract_config->has_worker_hash(local_image_hash_unverified_));
     } else {
       jb.add_element("actual_image_hash", true);
     }
-    if (need_check_proxy_hash_ && runner_config()) {
+    if (check_image_hashes() && runner_config()) {
       jb.add_element("actual_model",
                      runner_config()->root_contract_config->has_model_hash(td::sha256_bits256(model_name_)));
     } else {
@@ -712,7 +711,7 @@ std::string WorkerRunner::http_generate_json_stats() {
     jb.add_element("owner_address", owner_address().rserialize(true));
     jb.add_element("model", model_name_);
     jb.add_element("coefficient", coefficient_);
-    jb.add_element("check_proxy_hash", need_check_proxy_hash_);
+    jb.add_element("check_image_hashes", check_image_hashes());
     jb.stop_object();
   }
   store_root_contract_stat(jb);

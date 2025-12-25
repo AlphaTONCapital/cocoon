@@ -1,224 +1,76 @@
 #include "ValidateRequest.h"
+#include "Ed25519.h"
+#include "checksum.h"
+#include "common/bitstring.h"
 #include "errorcode.h"
+#include "nlohmann/detail/input/json_sax.hpp"
 #include "td/utils/JsonBuilder.h"
+#include "td/utils/SharedSlice.h"
+#include "td/utils/Status.h"
+#include "td/utils/base64.h"
 #include "td/utils/buffer.h"
+#include "td/utils/misc.h"
+#include "tdport/td/e2e/MessageEncryption.h"
 
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
 #include <set>
 
 namespace cocoon {
 
-td::Result<td::BufferSlice> validate_modify_chat_completions_request(td::BufferSlice request, std::string *model_ptr,
-                                                                     td::int64 *max_completion_tokens_ptr) {
-  auto S = request.as_slice();
-  auto b = nlohmann::json::parse(S.begin(), S.end(), nullptr, false, false);
+static td::Result<td::SecureString> generate_shared_secret(const td::Bits256 &pk_b256, const td::Bits256 &pub_b256,
+                                                           td::Slice nonce, bool is_outbound) {
+  td::Ed25519::PrivateKey pk(td::SecureString{pk_b256.as_slice()});
+  td::Ed25519::PublicKey pub(td::SecureString{pub_b256.as_slice()});
+  TRY_RESULT(shared_secret, td::Ed25519::compute_shared_secret(pub, pk));
 
-  if (b.is_discarded()) {
-    return td::Status::Error(ton::ErrorCode::protoviolation, "expected json object");
-  }
-  if (!b.is_object()) {
-    return td::Status::Error(ton::ErrorCode::protoviolation, "expected json object");
-  }
+  td::SecureString tmp(32 + nonce.size() + 1);
 
-  std::string model;
-  td::int64 max_completion_tokens = 0;
-  bool has_stream_options = false;
-  bool has_stream = false;
-  bool stream = false;
-  bool has_max_tokens = false;
-
-  std::set<td::Slice> processed_fields;
-
-  for (auto &[name, value] : b.items()) {
-    if (processed_fields.count(name) > 0) {
-      return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << "duplicate '" << name << "' field");
-    }
-    processed_fields.insert(name);
-    if (name == "messages") {
-      if (!value.is_array()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "messages must be an array");
-      }
-
-      // check?
-    } else if (name == "model") {
-      if (!value.is_string()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "model must be a string");
-      }
-      model = value.get<std::string>();
-    } else if (name == "frequency_penalty") {
-      if (!value.is_number()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "frequency_penalty must be a number");
-      }
-      double v = value.get<double>();
-      if (v < -2 || v > 2) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "frequency_penalty must be between -2.0 and 2.0");
-      }
-    } else if (false && name == "audio") {
-    } else if (false && name == "logit_bias") {
-    } else if (false && name == "logprobs") {
-    } else if (name == "max_completion_tokens") {
-      if (!value.is_number_integer()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "max_completion_tokens must be a number");
-      }
-      max_completion_tokens = value.get<td::int64>();
-      if (max_completion_tokens < 0) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "max_completion_tokens must be non-negative");
-      }
-      if (max_completion_tokens_ptr && max_completion_tokens > *max_completion_tokens_ptr) {
-        value = *max_completion_tokens_ptr;
-      }
-      has_max_tokens = true;
-    } else if (name == "max_tokens") {
-      if (!value.is_number_integer()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "max_completion_tokens must be a number");
-      }
-      max_completion_tokens = value.get<td::int64>();
-      if (max_completion_tokens < 0) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "max_completion_tokens must be non-negative");
-      }
-      if (max_completion_tokens_ptr && max_completion_tokens > *max_completion_tokens_ptr) {
-        value = *max_completion_tokens_ptr;
-      }
-      has_max_tokens = true;
-    } else if (false && name == "metadata") {
-    } else if (false && name == "modalities") {
-    } else if (name == "n") {
-      if (!value.is_number_integer()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "n must be a number");
-      }
-      auto n = value.get<td::int64>();
-      if (n < 1) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "n must be positive");
-      }
-    } else if (name == "parallel_tool_calls") {
-      if (!value.is_boolean()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "parallel_tool_calls must be a boolean");
-      }
-    } else if (name == "prediction") {
-      if (!value.is_number()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "prediction must be a boolean");
-      }
-    } else if (name == "presence_penalty") {
-      if (!value.is_number()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "presence_penalty must be a number");
-      }
-    } else if (false && name == "prompt_cache_key") {
-    } else if (name == "reasoning_effort") {
-      if (!value.is_string()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "reasoning_effort must be a string");
-      }
-    } else if (name == "response_format") {
-      // do not validate
-    } else if (false && name == "safety_identifier") {
-    } else if (false && name == "service_tier") {
-    } else if (name == "stop") {
-      // allow for now, but since it's deprecated
-    } else if (false && name == "store") {
-    } else if (name == "stream") {
-      if (!value.is_boolean()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "stream must be a boolean");
-      }
-      has_stream = true;
-      stream = value.get<bool>();
-    } else if (name == "stream_options") {
-      if (!value.is_object()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "stream_options must be an object");
-      }
-      has_stream_options = true;
-      value["include_usage"] = true;
-      for (auto &[k, v] : value.items()) {
-        if (k == "include_obfuscation") {
-          if (!v.is_boolean()) {
-            return td::Status::Error(ton::ErrorCode::protoviolation,
-                                     "stream_options.include_obfuscation must be a boolean");
-          }
-        } else if (k == "include_usage") {
-          if (!v.is_boolean()) {
-            return td::Status::Error(ton::ErrorCode::protoviolation, "stream_options.include_usage must be a boolean");
-          }
-        } else {
-          return td::Status::Error(ton::ErrorCode::protoviolation,
-                                   PSTRING() << "unknown option '" << k << "' in stream_options");
-        }
-      }
-    } else if (name == "temperature") {
-      if (!value.is_number()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "temperature must be a number");
-      }
-    } else if (false && name == "tool_choice") {
-    } else if (false && name == "tools") {
-    } else if (name == "top_logprobs") {
-      if (!value.is_number_unsigned()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "top_logprobs must be a number");
-      }
-    } else if (name == "top_p") {
-      if (!value.is_number()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "top_p must be a number");
-      }
-    } else if (name == "verbosity") {
-      if (!value.is_string()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "verbosity must be a string");
-      }
-    } else if (false && name == "web_search_options") {
-    } else if (name == "chat_template_kwargs") {
-      if (!value.is_object()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "chat_template_kwargs must be an object");
-      }
-      for (auto &[i_name, i_value] : value.items()) {
-        if (i_name == "enable_thinking") {
-          if (!i_value.is_boolean()) {
-            return td::Status::Error(ton::ErrorCode::protoviolation,
-                                     "chat_template_kwargs.enable_thinking must be a boolean");
-          }
-        } else {
-          return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << "unknown suboption '" << i_name
-                                                                             << "' in chat_template_kwargs in request");
-        }
-      }
-
-    } else {
-      return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING()
-                                                                   << "unknown option '" << name << "' in request");
-    }
-  }
-
-  if (processed_fields.count("messages") == 0) {
-    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << "missing required field 'messages'");
-  }
-  if (processed_fields.count("model") == 0) {
-    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << "missing required field 'model'");
-  }
-
-  if (!has_stream && has_stream_options) {
-    b["stream"] = true;
-    has_stream = true;
-    stream = true;
-  }
-
-  if (stream && !has_stream_options) {
-    b["stream_options"]["include_usage"] = true;
-    has_stream_options = true;
-  }
-
-  if (!has_max_tokens && max_completion_tokens_ptr) {
-    b["max_completion_tokens"] = *max_completion_tokens_ptr;
-  }
-
-  if (model_ptr) {
-    *model_ptr = model;
-  }
-
-  if (max_completion_tokens_ptr) {
-    *max_completion_tokens_ptr = max_completion_tokens;
-  }
-
-  return td::BufferSlice(b.dump());
+  tmp.as_mutable_slice().copy_from(shared_secret.as_slice());
+  tmp.as_mutable_slice().remove_prefix(32).copy_from(nonce);
+  tmp.as_mutable_slice().remove_prefix(32 + nonce.size()).copy_from(is_outbound ? "o" : "i");
+  auto val = td::sha256_bits256(tmp.as_slice());
+  return td::SecureString(val.as_slice());
 }
 
-td::Result<td::BufferSlice> validate_modify_completions_request(td::BufferSlice request, std::string *model_ptr,
-                                                                td::int64 *max_completion_tokens_ptr) {
-  auto S = request.as_slice();
+static bool string_is_encrypted(td::Slice S) {
+  return S.size() >= 8 && S[0] == '\x01' && S[1] == '\x02' && S[2] == '\x04' && S[3] == '\x03';
+}
+
+static td::Result<std::string> decrypt_string(td::Slice S, td::Slice secret) {
+  CHECK(string_is_encrypted(S));
+  S.remove_prefix(4);
+  auto encryption_type = S.copy().truncate(4);
+  S.remove_prefix(4);
+
+  if (encryption_type == "SIMP") {
+    TRY_RESULT(res, tde2e_core::MessageEncryption::decrypt_data(S, secret));
+    if (string_is_encrypted(res)) {
+      return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << "nested encryption");
+    }
+    return res.as_slice().str();
+  } else {
+    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << "bad encryption method");
+  }
+}
+
+static td::Status decrypt_all_strings(nlohmann::json &b, td::Slice shared_secret) {
+  for (auto &[key, value] : b.items()) {
+    if (value.is_string()) {
+      auto v = value.get<std::string>();
+      if (string_is_encrypted(v)) {
+        TRY_RESULT(nv, decrypt_string(v, shared_secret));
+        value = v;
+      }
+    } else if (value.is_structured()) {
+      decrypt_all_strings(value, shared_secret);
+    }
+  }
+  return td::Status::OK();
+}
+
+static td::Result<nlohmann::json> parse_json(td::Slice S) {
   auto b = nlohmann::json::parse(S.begin(), S.end(), nullptr, false, false);
 
   if (b.is_discarded()) {
@@ -227,177 +79,730 @@ td::Result<td::BufferSlice> validate_modify_completions_request(td::BufferSlice 
   if (!b.is_object()) {
     return td::Status::Error(ton::ErrorCode::protoviolation, "expected json object");
   }
+  return b;
+}
+
+struct Ctx {
+  struct Level {
+    Level(nlohmann::json *obj, std::string path) : obj(obj), path(std::move(path)) {
+    }
+    nlohmann::json *obj;
+    std::string path;
+    std::set<std::string> processed_fields;
+  };
+  std::vector<Level> levels;
 
   std::string model;
+  td::int64 default_max_tokens;
+  td::int64 max_tokens;
+
+  td::SecureString shared_secret_;
+  bool client_mode = false;
+
+  Ctx(nlohmann::json *obj) {
+    levels.emplace_back(obj, "");
+  }
+
+  const std::string &path() const {
+    return levels.back().path;
+  }
+
+  nlohmann::json *obj() const {
+    return levels.back().obj;
+  }
+
+  void replace_object(nlohmann::json j) {
+    *levels.back().obj = std::move(j);
+  }
+
+  template <typename F>
+  td::Status process_obj_field(const std::string &name, bool is_required, F &&run) {
+    levels.back().processed_fields.insert(name);
+
+    auto e = levels.back().obj;
+    if (!e) {
+      if (is_required) {
+        return td::Status::Error(ton::ErrorCode::protoviolation,
+                                 PSTRING() << "'" << path() << "' must have a field '" << name << "'");
+      }
+      return td::Status::OK();
+    }
+    if (!e->contains(name)) {
+      if (is_required) {
+        return td::Status::Error(ton::ErrorCode::protoviolation,
+                                 PSTRING() << "'" << path() << "' must have a field '" << name << "'");
+      }
+      return td::Status::OK();
+    }
+
+    auto &el = (*e)[name];
+    levels.emplace_back(&el, PSTRING() << path() << "." << name);
+    TRY_STATUS(run(*this));
+    if (el.is_object()) {
+      TRY_STATUS(check_unprocessed_fields());
+    }
+    levels.pop_back();
+    return td::Status::OK();
+  }
+
+  template <typename F>
+  td::Status process_array(bool is_required, F &&run) {
+    auto e = obj();
+    if (!e) {
+      if (is_required) {
+        return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << path() << " must exist");
+      }
+    }
+    if (!e->is_array()) {
+      return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << path() << " must be an array");
+    }
+
+    size_t idx = 0;
+    for (auto &el : *e) {
+      levels.emplace_back(&el, PSTRING() << path() << "[" << (idx++) << "]");
+      TRY_STATUS(run(*this));
+      if (el.is_object()) {
+        TRY_STATUS(check_unprocessed_fields());
+      }
+      levels.pop_back();
+    }
+
+    return td::Status::OK();
+  }
+
+  td::Status check_unprocessed_fields() {
+    auto e = levels.back().obj;
+    if (!e || !e->is_object()) {
+      return td::Status::OK();
+    }
+
+    for (auto &[name, value] : e->items()) {
+      if (!levels.back().processed_fields.contains(name)) {
+        return td::Status::Error(ton::ErrorCode::protoviolation,
+                                 PSTRING() << path() << " has unknown field '" << name << "'");
+      }
+    }
+    return td::Status::OK();
+  }
+
+  td::Result<std::string> get_string() {
+    auto e = obj();
+    if (!e || !e->is_string()) {
+      return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << path() << " must be a string");
+    }
+    return e->get<std::string>();
+  }
+
+  td::Result<td::int64> get_integer() {
+    auto e = obj();
+    if (!e || !e->is_number_integer()) {
+      return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << path() << " must be a string");
+    }
+    return e->get<long long>();
+  }
+
+  td::Result<bool> get_boolean() {
+    auto e = obj();
+    if (!e || !e->is_boolean()) {
+      return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << path() << " must be a string");
+    }
+    return e->get<bool>();
+  }
+};
+
+static td::Status process_string(Ctx &ctx) {
+  if (!ctx.obj()->is_string()) {
+    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << ctx.path() << " must be a string");
+  }
+  TRY_STATUS(ctx.get_string());
+  return td::Status::OK();
+}
+
+static td::Status process_string_b64(Ctx &ctx) {
+  if (!ctx.obj()->is_string()) {
+    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << ctx.path() << " must be a string");
+  }
+  TRY_RESULT(v, ctx.get_string());
+  if (v.size() % 2 != 0) {
+    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << ctx.path() << " must be a hex string");
+  }
+  for (auto c : v) {
+    bool is_hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    if (!is_hex) {
+      return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << ctx.path() << " must be a hex string");
+    }
+  }
+  return td::Status::OK();
+}
+
+static td::Status process_string_url_or_b64(Ctx &ctx) {
+  if (!ctx.obj()->is_string()) {
+    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << ctx.path() << " must be a string");
+  }
+  TRY_STATUS(ctx.get_string());
+  return td::Status::OK();
+}
+
+static td::Status process_double(Ctx &ctx) {
+  if (!ctx.obj()->is_number()) {
+    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << ctx.path() << " must be a number");
+  }
+  return td::Status::OK();
+}
+
+static td::Status process_integer(Ctx &ctx) {
+  if (!ctx.obj()->is_number_integer()) {
+    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << ctx.path() << " must be a number");
+  }
+  return td::Status::OK();
+}
+
+static td::Status process_boolean(Ctx &ctx) {
+  if (!ctx.obj()->is_boolean()) {
+    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << ctx.path() << " must be a boolean");
+  }
+  return td::Status::OK();
+}
+
+template <typename F>
+static td::Status process_string_or_array(Ctx &ctx, F &&run) {
+  if (ctx.obj()->is_array()) {
+    return ctx.process_array(true, std::move(run));
+  }
+  return process_string(ctx);
+}
+
+template <typename F>
+static td::Status process_string_or_object(Ctx &ctx, F &&run) {
+  if (ctx.obj()->is_object()) {
+    return ctx.process_array(true, std::move(run));
+  }
+  return process_string(ctx);
+}
+
+static td::Status process_image_url(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("url", true, process_string_url_or_b64));
+  TRY_STATUS(ctx.process_obj_field("detail", false, process_string));
+  return td::Status::OK();
+}
+
+static td::Status process_content_part_text(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("text", true, process_string));
+  return td::Status::OK();
+}
+
+static td::Status process_content_part_image(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("image", true, process_image_url));
+  return td::Status::OK();
+}
+
+static td::Status process_content_part_audio(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("input_audio", true, [](Ctx &ctx) {
+    ctx.process_obj_field("format", true, process_string);
+    ctx.process_obj_field("data", true, process_string_b64);
+    return td::Status::OK();
+  }));
+  return td::Status::OK();
+}
+
+static td::Status process_content_part_file(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("file", true, [](Ctx &ctx) {
+    ctx.process_obj_field("file_data", false, process_string_b64);
+    ctx.process_obj_field("file_id", false, process_string);
+    ctx.process_obj_field("filename", false, process_string);
+    return td::Status::OK();
+  }));
+  return td::Status::OK();
+}
+
+static td::Status process_content_part_refusal(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("refusal", true, process_string));
+  return td::Status::OK();
+}
+
+static td::Status process_content_part(Ctx &ctx) {
+  std::string type;
+  TRY_STATUS(ctx.process_obj_field("type", true, [&type](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(type, ctx.get_string());
+    if (type.size() >= 128) {
+      return td::Status::Error(ton::ErrorCode::protoviolation,
+                               PSTRING() << ctx.path() << " must be a string not longer than 128 chars");
+    }
+    return td::Status::OK();
+  }));
+
+  bool is_text = type.find("text");
+  bool is_image = type.find("image");
+  bool is_audio = type.find("audio");
+  bool is_file = type.find("file");
+  bool is_refusal = ctx.obj()->contains("refusal");
+  if (is_refusal) {
+    return process_content_part_refusal(ctx);
+  } else if (is_text) {
+    return process_content_part_text(ctx);
+  } else if (is_image) {
+    return process_content_part_image(ctx);
+  } else if (is_audio) {
+    return process_content_part_audio(ctx);
+  } else if (is_file) {
+    return process_content_part_file(ctx);
+  } else {
+    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << ctx.path() << " has unknown type " << type);
+  }
+}
+
+static td::Status process_developer_message(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("content", true,
+                                   [](Ctx &ctx) { return process_string_or_array(ctx, process_content_part); }));
+  TRY_STATUS(ctx.process_obj_field("name", false, process_string));
+  return td::Status::OK();
+}
+
+static td::Status process_system_message(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("content", true,
+                                   [](Ctx &ctx) { return process_string_or_array(ctx, process_content_part); }));
+  TRY_STATUS(ctx.process_obj_field("name", false, process_string));
+  return td::Status::OK();
+}
+
+static td::Status process_user_message(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("content", true,
+                                   [](Ctx &ctx) { return process_string_or_array(ctx, process_content_part); }));
+  TRY_STATUS(ctx.process_obj_field("name", false, process_string));
+  return td::Status::OK();
+}
+
+static td::Status process_function_call(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("arguments", true, process_string));
+  TRY_STATUS(ctx.process_obj_field("name", true, process_string));
+  return td::Status::OK();
+}
+
+static td::Status process_function_tool_call(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("id", true, process_string));
+  TRY_STATUS(ctx.process_obj_field("function", true, process_function_call));
+  return td::Status::OK();
+}
+
+static td::Status process_custom_tool_call(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("id", true, process_string));
+  TRY_STATUS(ctx.process_obj_field("custom", true, [](Ctx &ctx) {
+    TRY_STATUS(ctx.process_obj_field("input", true, process_string));
+    TRY_STATUS(ctx.process_obj_field("name", true, process_string));
+    return td::Status::OK();
+  }));
+  return td::Status::OK();
+}
+
+static td::Status process_tool_call(Ctx &ctx) {
+  std::string type;
+  TRY_STATUS(ctx.process_obj_field("type", true, [&type](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(type, ctx.get_string());
+    return td::Status::OK();
+  }));
+  if (type == "function") {
+    return process_function_tool_call(ctx);
+  } else if (type == "custom") {
+    return process_custom_tool_call(ctx);
+  } else {
+    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << ctx.path() << " has unknown type " << type);
+  }
+}
+
+static td::Status process_assistant_message(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("audio", false, [](Ctx &ctx) {
+    TRY_STATUS(ctx.process_obj_field("id", true, process_string));
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("content", false,
+                                   [](Ctx &ctx) { return process_string_or_array(ctx, process_content_part); }));
+  TRY_STATUS(ctx.process_obj_field("function_call", false, process_function_call));
+  TRY_STATUS(ctx.process_obj_field("name", false, process_string));
+  TRY_STATUS(ctx.process_obj_field("refusal", false, process_string));
+  TRY_STATUS(ctx.process_obj_field("tool_calls", false, [](Ctx &ctx) {
+    TRY_STATUS(ctx.process_array(false, process_tool_call));
+    return td::Status::OK();
+  }));
+  return td::Status::OK();
+}
+
+static td::Status process_tool_message(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("tool_call_id", true, process_string));
+  TRY_STATUS(ctx.process_obj_field("content", true,
+                                   [](Ctx &ctx) { return process_string_or_array(ctx, process_content_part); }));
+  return td::Status::OK();
+}
+
+static td::Status process_function_message(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("name", true, process_string));
+  TRY_STATUS(ctx.process_obj_field("content", true, process_string));
+  return td::Status::OK();
+}
+
+static td::Status process_message(Ctx &ctx) {
+  std::string role;
+  TRY_STATUS(ctx.process_obj_field("role", true, [&role](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(role, ctx.get_string());
+    return td::Status::OK();
+  }));
+
+  if (role == "developer") {
+    return process_developer_message(ctx);
+  } else if (role == "system") {
+    return process_system_message(ctx);
+  } else if (role == "user") {
+    return process_user_message(ctx);
+  } else if (role == "assistant") {
+    return process_assistant_message(ctx);
+  } else if (role == "tool") {
+    return process_tool_message(ctx);
+  } else if (role == "function") {
+    return process_function_message(ctx);
+  } else {
+    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << ctx.path() << " has unknown role " << role);
+  }
+}
+
+static td::Status process_static_content(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("type", true, process_string));
+  TRY_STATUS(ctx.process_obj_field("content", true,
+                                   [](Ctx &ctx) { return process_string_or_array(ctx, process_content_part); }));
+  return td::Status::OK();
+}
+
+static td::Status process_stream_options(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("include_obfuscation", false, process_boolean));
+  TRY_STATUS(ctx.process_obj_field("include_usage", false, process_boolean));
+  return td::Status::OK();
+}
+
+static td::Status process_chat_completions(Ctx &ctx) {
+  std::string model;
   td::int64 max_completion_tokens = 0;
-  bool has_stream_options = false;
   bool has_stream = false;
-  bool stream = false;
-  bool has_max_tokens = false;
 
-  std::set<td::Slice> processed_fields;
+  TRY_STATUS(ctx.process_obj_field("messages", true, [](Ctx &ctx) {
+    TRY_STATUS(ctx.process_array(true, process_message));
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("model", true, [&model](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(model, ctx.get_string());
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("audio", false, [](Ctx &ctx) {
+    TRY_STATUS(ctx.process_obj_field("format", true, process_string));
+    TRY_STATUS(ctx.process_obj_field("voice", true, [](Ctx &ctx) {
+      return process_string_or_object(ctx, [](Ctx &ctx) {
+        TRY_STATUS(ctx.process_obj_field("id", true, process_string));
+        return td::Status::OK();
+      });
+    }));
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("frequency_penalty", false, process_double));
+  if (false) {
+    TRY_STATUS(ctx.process_obj_field("function_call", false, [](Ctx &ctx) {
+      return process_string_or_object(ctx, [](Ctx &ctx) {
+        TRY_STATUS(ctx.process_obj_field("name", true, process_string));
+        return td::Status::OK();
+      });
+    }));
+  }
+  if (false) {
+    TRY_STATUS(ctx.process_obj_field("function", false, [](Ctx &ctx) {
+      return process_string_or_object(ctx, [](Ctx &ctx) {
+        TRY_STATUS(ctx.process_obj_field("name", true, process_string));
+        TRY_STATUS(ctx.process_obj_field("description", false, process_string));
+        TRY_STATUS(ctx.process_obj_field("parameters", false, [](Ctx &ctx) { return td::Status::OK(); }));
+        return td::Status::OK();
+      });
+    }));
+  }
+  if (false) {
+    TRY_STATUS(ctx.process_obj_field("logit_bias", false, [](Ctx &ctx) { return td::Status::OK(); }));
+  }
+  TRY_STATUS(ctx.process_obj_field("logprobs", false, process_boolean));
+  TRY_STATUS(ctx.process_obj_field("max_completion_tokens", false, [&max_completion_tokens](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(max_completion_tokens, ctx.get_integer());
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("max_tokens", false, [&max_completion_tokens](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(max_completion_tokens, ctx.get_integer());
+    return td::Status::OK();
+  }));
+  if (false) {
+    TRY_STATUS(ctx.process_obj_field("metadata", false, [](Ctx &ctx) { return td::Status::OK(); }));
+  }
+  TRY_STATUS(
+      ctx.process_obj_field("modalities", false, [](Ctx &ctx) { return ctx.process_array(false, process_string); }));
+  TRY_STATUS(ctx.process_obj_field("n", false, process_integer));
+  TRY_STATUS(ctx.process_obj_field("parallel_tool_calls", false, process_boolean));
+  TRY_STATUS(ctx.process_obj_field("prediction", false, process_static_content));
+  TRY_STATUS(ctx.process_obj_field("presence_penalty", false, process_double));
+  TRY_STATUS(ctx.process_obj_field("prompt_cache_key", false, process_string));
+  TRY_STATUS(ctx.process_obj_field("prompt_cache_retention", false, process_string));
+  TRY_STATUS(ctx.process_obj_field("reasoning_effort", false, process_string));
+  TRY_STATUS(ctx.process_obj_field("response_format", false, [](Ctx &ctx) {  // do not validate
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("safety_identifier", false, process_string));
+  TRY_STATUS(ctx.process_obj_field("seed", false, process_integer));
+  TRY_STATUS(ctx.process_obj_field("service_tier", false, process_integer));
+  TRY_STATUS(ctx.process_obj_field("stop", false, [](Ctx &ctx) {
+    TRY_STATUS(ctx.process_array(false, process_string));
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("store", false, process_boolean));
+  TRY_STATUS(ctx.process_obj_field("stream", false, [&has_stream](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(has_stream, ctx.get_boolean());
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("stream_options", false, process_stream_options));
+  TRY_STATUS(ctx.process_obj_field("temperature", false, process_double));
+  if (false) {
+    TRY_STATUS(ctx.process_obj_field("tool_choice", false, [](Ctx &ctx) { return td::Status::OK(); }));
+  }
+  if (false) {
+    TRY_STATUS(ctx.process_obj_field(
+        "tools", false, [](Ctx &ctx) { return ctx.process_array(false, [](Ctx &ctx) { return td::Status::OK(); }); }));
+  }
+  TRY_STATUS(ctx.process_obj_field("top_logprobs", false, process_integer));
+  TRY_STATUS(ctx.process_obj_field("top_p", false, process_double));
+  TRY_STATUS(ctx.process_obj_field("user", false, process_string));
+  TRY_STATUS(ctx.process_obj_field("verbosity", false, process_string));
+  if (false) {
+    TRY_STATUS(ctx.process_obj_field("web_search_options", false, [](Ctx &ctx) { return td::Status::OK(); }));
+  }
+  TRY_STATUS(ctx.process_obj_field("skip_special_tokens", false, process_boolean)); /* non-standard */
 
-  for (auto &[name, value] : b.items()) {
-    if (processed_fields.count(name) > 0) {
-      return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << "duplicate '" << name << "' field");
-    }
-    processed_fields.insert(name);
-    if (name == "prompt") {
-      if (!value.is_array() && !value.is_string()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "prompt must be an array or a string");
-      }
+  auto &obj = *ctx.obj();
 
-      // check?
-    } else if (name == "model") {
-      if (!value.is_string()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "model must be a string");
-      }
-      model = value.get<std::string>();
-    } else if (name == "best_of") {
-      if (!value.is_number_unsigned()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "best_of must be a number");
-      }
-    } else if (name == "echo") {
-      if (!value.is_boolean()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "echo must be a boolean");
-      }
-    } else if (name == "frequency_penalty") {
-      if (!value.is_number()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "frequency_penalty must be a number");
-      }
-      double v = value.get<double>();
-      if (v < -2 || v > 2) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "frequency_penalty must be between -2.0 and 2.0");
-      }
-    } else if (false && name == "logit_bias") {
-    } else if (false && name == "logprobs") {
-    } else if (name == "max_tokens") {
-      if (!value.is_number_integer()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "max_completion_tokens must be a number");
-      }
-      max_completion_tokens = value.get<td::int64>();
-      if (max_completion_tokens < 0) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "max_completion_tokens must be non-negative");
-      }
-      if (max_completion_tokens_ptr && max_completion_tokens > *max_completion_tokens_ptr) {
-        value = *max_completion_tokens_ptr;
-      }
-      has_max_tokens = true;
-    } else if (name == "n") {
-      if (!value.is_number_integer()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "n must be a number");
-      }
-      auto n = value.get<td::int64>();
-      if (n < 1) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "n must be positive");
-      }
-    } else if (name == "presence_penalty") {
-      if (!value.is_number()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "presence_penalty must be a boolean");
-      }
-    } else if (name == "seed") {
-      if (!value.is_number_integer()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "seed must be an integer");
-      }
-    } else if (name == "stop") {
-      // allow for now, but since it's deprecated
-    } else if (name == "stream") {
-      if (!value.is_boolean()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "stream must be a boolean");
-      }
-      has_stream = true;
-      stream = value.get<bool>();
-    } else if (name == "stream_options") {
-      if (!value.is_object()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "stream_options must be an object");
-      }
-      has_stream_options = true;
-      value["include_usage"] = true;
-      for (auto &[k, v] : value.items()) {
-        if (k == "include_obfuscation") {
-          if (!v.is_boolean()) {
-            return td::Status::Error(ton::ErrorCode::protoviolation,
-                                     "stream_options.include_obfuscation must be a boolean");
-          }
-        } else if (k == "include_usage") {
-          if (!v.is_boolean()) {
-            return td::Status::Error(ton::ErrorCode::protoviolation, "stream_options.include_usage must be a boolean");
-          }
-        } else {
-          return td::Status::Error(ton::ErrorCode::protoviolation,
-                                   PSTRING() << "unknown option '" << k << "' in stream_options");
-        }
-      }
-    } else if (name == "suffix") {
-      if (!value.is_boolean()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "suffix must be a boolean");
-      }
-    } else if (name == "temperature") {
-      if (!value.is_number()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "temperature must be a number");
-      }
-    } else if (name == "top_p") {
-      if (!value.is_number()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "top_p must be a number");
-      }
-    } else if (false && name == "user") {
-    } else if (name == "skip_special_tokens") /* non-standart */ {
-      if (!value.is_boolean()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "skip_special_tokens must be a number");
-      }
-    } else {
-      return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING()
-                                                                   << "unknown option '" << name << "' in request");
-    }
+  if (has_stream) {
+    obj["stream_options"]["include_usage"] = true;
+  } else {
+    obj.erase("stream_options");
   }
 
-  if (processed_fields.count("prompt") == 0) {
-    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << "missing required field 'prompt'");
-  }
-  if (processed_fields.count("model") == 0) {
-    return td::Status::Error(ton::ErrorCode::protoviolation, PSTRING() << "missing required field 'model'");
+  if (max_completion_tokens <= 0 && ctx.default_max_tokens > 0) {
+    max_completion_tokens = ctx.default_max_tokens;
   }
 
-  if (!has_stream && has_stream_options) {
-    b["stream"] = true;
-    has_stream = true;
-    stream = true;
+  obj["max_tokens"] = max_completion_tokens;
+  obj["max_completion_tokens"] = max_completion_tokens;
+  ctx.max_tokens = max_completion_tokens;
+  ctx.model = model;
+
+  return td::Status::OK();
+}
+
+static td::Status process_completions(Ctx &ctx) {
+  std::string model;
+  td::int64 max_completion_tokens = 0;
+  bool has_stream = false;
+
+  TRY_STATUS(ctx.process_obj_field("model", true, [&model](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(model, ctx.get_string());
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("prompt", true, [](Ctx &ctx) {
+    TRY_STATUS(process_string_or_array(ctx, process_string));
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("best_of", false, process_integer));
+  TRY_STATUS(ctx.process_obj_field("echo", false, process_boolean));
+  TRY_STATUS(ctx.process_obj_field("frequency_penalty", false, process_double));
+  if (false) {
+    TRY_STATUS(ctx.process_obj_field("logit_bias", false, [](Ctx &ctx) { return td::Status::OK(); }));
+  }
+  TRY_STATUS(ctx.process_obj_field("logprobs", false, process_boolean));
+  TRY_STATUS(ctx.process_obj_field("max_completion_tokens", false, [&max_completion_tokens](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(max_completion_tokens, ctx.get_integer());
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("max_tokens", false, [&max_completion_tokens](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(max_completion_tokens, ctx.get_integer());
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("n", false, process_integer));
+  TRY_STATUS(ctx.process_obj_field("presence_penalty", false, process_double));
+  TRY_STATUS(ctx.process_obj_field("seed", false, process_integer));
+  TRY_STATUS(ctx.process_obj_field("stop", false, [](Ctx &ctx) {
+    TRY_STATUS(ctx.process_array(false, process_string));
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("stream", false, [&has_stream](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(has_stream, ctx.get_boolean());
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("stream_options", false, process_stream_options));
+  TRY_STATUS(ctx.process_obj_field("suffix", false, process_string));
+  TRY_STATUS(ctx.process_obj_field("temperature", false, process_double));
+  TRY_STATUS(ctx.process_obj_field("top_p", false, process_double));
+  TRY_STATUS(ctx.process_obj_field("user", false, process_string));
+  TRY_STATUS(ctx.process_obj_field("skip_special_tokens", false, process_boolean)); /* non-standard */
+
+  auto &obj = *ctx.obj();
+
+  if (has_stream) {
+    obj["stream_options"]["include_usage"] = true;
+  } else {
+    obj.erase("stream_options");
   }
 
-  if (stream && !has_stream_options) {
-    b["stream_options"]["include_usage"] = true;
-    has_stream_options = true;
+  if (max_completion_tokens <= 0 && ctx.default_max_tokens > 0) {
+    max_completion_tokens = ctx.default_max_tokens;
   }
 
-  if (!has_max_tokens && max_completion_tokens_ptr) {
-    b["max_tokens"] = *max_completion_tokens_ptr;
+  obj["max_tokens"] = max_completion_tokens;
+  obj["max_completion_tokens"] = max_completion_tokens;
+  ctx.max_tokens = max_completion_tokens;
+  ctx.model = model;
+
+  return td::Status::OK();
+}
+
+static td::Status process_create_audio_transcription(Ctx &ctx) {
+  std::string model;
+  td::int64 max_completion_tokens = 0;
+  bool has_stream = false;
+
+  TRY_STATUS(ctx.process_obj_field("model", true, [&model](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(model, ctx.get_string());
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("file", true, [](Ctx &ctx) {
+    TRY_STATUS(process_string_or_array(ctx, process_string));
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("chunking_strategy", false, [](Ctx &ctx) {
+    return process_string_or_object(ctx, [](Ctx &ctx) {
+      TRY_STATUS(ctx.process_obj_field("type", true, process_string));
+      TRY_STATUS(ctx.process_obj_field("prefix_padding_ms", false, process_integer));
+      TRY_STATUS(ctx.process_obj_field("silence_duration_ms", false, process_integer));
+      TRY_STATUS(ctx.process_obj_field("threshold", false, process_double));
+      return td::Status::OK();
+    });
+  }));
+  TRY_STATUS(
+      ctx.process_obj_field("include", false, [](Ctx &ctx) { return ctx.process_array(false, process_string); }));
+  TRY_STATUS(ctx.process_obj_field("known_speaker_names", false,
+                                   [](Ctx &ctx) { return ctx.process_array(false, process_string); }));
+  TRY_STATUS(ctx.process_obj_field("known_speaker_references", false,
+                                   [](Ctx &ctx) { return ctx.process_array(false, process_string); }));
+  TRY_STATUS(ctx.process_obj_field("language", false, process_string));
+  TRY_STATUS(ctx.process_obj_field("max_completion_tokens", false, [&max_completion_tokens](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(max_completion_tokens, ctx.get_integer());
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("max_tokens", false, [&max_completion_tokens](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(max_completion_tokens, ctx.get_integer());
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("prompt", false, process_string));
+  TRY_STATUS(ctx.process_obj_field("response_format", false, process_string));
+  TRY_STATUS(ctx.process_obj_field("stream", false, [&has_stream](Ctx &ctx) {
+    TRY_RESULT_ASSIGN(has_stream, ctx.get_boolean());
+    return td::Status::OK();
+  }));
+  TRY_STATUS(ctx.process_obj_field("stream_options", false, process_stream_options));
+  TRY_STATUS(ctx.process_obj_field("temperature", false, process_double));
+  TRY_STATUS(ctx.process_obj_field("timestamp_granularities", false,
+                                   [](Ctx &ctx) { return ctx.process_array(false, process_string); }));
+
+  auto &obj = *ctx.obj();
+
+  if (has_stream) {
+    obj["stream_options"]["include_usage"] = true;
+  } else {
+    obj.erase("stream_options");
   }
 
-  if (model_ptr) {
-    *model_ptr = model;
+  if (max_completion_tokens <= 0 && ctx.default_max_tokens > 0) {
+    max_completion_tokens = ctx.default_max_tokens;
   }
 
-  if (max_completion_tokens_ptr) {
-    *max_completion_tokens_ptr = max_completion_tokens;
-  }
+  obj["max_tokens"] = max_completion_tokens;
+  obj["max_completion_tokens"] = max_completion_tokens;
+  ctx.max_tokens = max_completion_tokens;
+  ctx.model = model;
 
-  return td::BufferSlice(b.dump());
+  return td::Status::OK();
 }
 
 td::Result<td::BufferSlice> validate_modify_request(std::string url, td::BufferSlice request, std::string *model,
-                                                    td::int64 *max_tokens) {
+                                                    td::int64 *max_tokens, const td::Bits256 *private_key,
+                                                    bool client_mode) {
   auto p = url.find('/');
   if (p != std::string::npos) {
     url = url.substr(p);
   }
 
+  TRY_RESULT(b, parse_json(request.as_slice()));
+  Ctx ctx(&b);
+
+  bool is_encrypted = false;
+  TRY_STATUS(ctx.process_obj_field("is_encrypted", false, [&](Ctx &ctx) {
+    if (!ctx.obj()->is_boolean()) {
+      return td::Status::Error(ton::ErrorCode::protoviolation, "is_encrypted must be boolean");
+    }
+    is_encrypted = ctx.obj()->get<bool>();
+    return td::Status::OK();
+  }));
+
+  td::Bits256 sender_public_key = td::Bits256::zero();
+  std::string encryption_nonce;
+  if (is_encrypted) {
+    TRY_STATUS(ctx.process_obj_field("sender_public_key", true, [&](Ctx &ctx) {
+      TRY_RESULT(val, ctx.get_string());
+      if (val.size() == 32) {
+        sender_public_key.as_slice().copy_from(val);
+      } else if (val.size() == 64) {
+        TRY_RESULT(v, td::hex_decode(val));
+        sender_public_key.as_slice().copy_from(v);
+      } else if (val.size() == 44) {
+        TRY_RESULT(v, td::base64_decode(val));
+        sender_public_key.as_slice().copy_from(v);
+      } else {
+        return td::Status::Error(ton::ErrorCode::protoviolation, "sender_public_key bad length");
+      }
+      return td::Status::OK();
+    }));
+    TRY_STATUS(ctx.process_obj_field("encryption_nonce", true, [&](Ctx &ctx) {
+      TRY_RESULT_ASSIGN(encryption_nonce, ctx.get_string());
+      return td::Status::OK();
+    }));
+
+    if (!client_mode) {
+      if (!private_key) {
+        return td::Status::Error(ton::ErrorCode::error, "cannot find private key for an encrypted request");
+      }
+      TRY_RESULT(shared_secret, generate_shared_secret(*private_key, sender_public_key, encryption_nonce, false));
+      decrypt_all_strings(*ctx.obj(), shared_secret.as_slice());
+    }
+  }
+
+  ctx.default_max_tokens = max_tokens ? *max_tokens : 0;
+  ctx.client_mode = client_mode;
+
   if (url == "/v1/chat/completions") {
-    return validate_modify_chat_completions_request(std::move(request), model, max_tokens);
+    TRY_STATUS(process_chat_completions(ctx));
   } else if (url == "/v1/completions") {
-    return validate_modify_completions_request(std::move(request), model, max_tokens);
+    TRY_STATUS(process_completions(ctx));
+  } else if (url == "/v1/audio/transcriptions") {
+    TRY_STATUS(process_create_audio_transcription(ctx));
   } else {
     return td::Status::Error(ton::ErrorCode::protoviolation, "unsupported method");
   }
+
+  TRY_STATUS(ctx.check_unprocessed_fields());
+
+  if (model) {
+    *model = ctx.model;
+  }
+  if (max_tokens) {
+    *max_tokens = ctx.max_tokens;
+  }
+  return td::BufferSlice(b.dump());
 }
 
 }  // namespace cocoon

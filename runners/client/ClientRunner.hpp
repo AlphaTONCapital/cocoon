@@ -20,7 +20,7 @@ namespace cocoon {
 
 class ClientRunner : public BaseRunner {
  public:
-  ClientRunner(std::string engine_config_filename) : BaseRunner(std::move(engine_config_filename)) {
+  ClientRunner(std::string engine_config_filename) : BaseRunner(RunnerRole::Client, std::move(engine_config_filename)) {
   }
 
   /* CONST PARAMS */
@@ -47,9 +47,6 @@ class ClientRunner : public BaseRunner {
   const auto &secret_hash() const {
     return secret_hash_;
   }
-  bool check_proxy_hash() const {
-    return check_proxy_hash_;
-  }
 
   /* SIMPLE SETTERS */
   void set_owner_address(block::StdAddress owner_address) {
@@ -58,9 +55,6 @@ class ClientRunner : public BaseRunner {
   void set_secret_string(td::SecureString secret_string) {
     secret_string_ = std::move(secret_string);
     secret_hash_ = td::sha256_bits256(secret_string_.as_slice());
-  }
-  void enable_check_proxy_hash() {
-    check_proxy_hash_ = true;
   }
 
   /* CHARGE AND TOP UP */
@@ -195,8 +189,6 @@ class ClientRunner : public BaseRunner {
   td::Timestamp next_payment_compare_at_;
   td::Timestamp next_update_balances_at_;
   td::uint32 params_version_{0};
-
-  bool check_proxy_hash_{false};
 
   std::shared_ptr<ClientStats> stats_ = std::make_shared<ClientStats>();
 };

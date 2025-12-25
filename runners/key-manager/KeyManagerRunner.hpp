@@ -9,6 +9,7 @@
 #include "td/utils/SharedSlice.h"
 #include "tl/TlObject.h"
 #include "ton/ton-types.h"
+#include "vm/cells/CellBuilder.h"
 #include <list>
 #include <memory>
 
@@ -17,16 +18,22 @@ namespace cocoon {
 struct PrivateKey {
   td::Bits256 private_key;
   td::Bits256 public_key;
-  bool for_proxies;
-  bool for_workers;
+  td::uint8 key_type_;
   td::int32 valid_since_config_version_;
   td::int32 valid_since_;
   td::int32 valid_until_;
+
+  void serialize(vm::CellBuilder &cb) {
+    cb.store_bytes(public_key.as_slice());
+    cb.store_long(key_type_, 8);
+    cb.store_long(valid_until_, 32);
+  }
 };
 
 class KeyManagerRunner : public BaseRunner {
  public:
-  KeyManagerRunner(std::string engine_config_filename) : BaseRunner(std::move(engine_config_filename)) {
+  KeyManagerRunner(std::string engine_config_filename)
+      : BaseRunner(RunnerRole::KeyManager, std::move(engine_config_filename)) {
   }
 
   /* CONST PARAMS */
@@ -34,15 +41,24 @@ class KeyManagerRunner : public BaseRunner {
   static constexpr td::int32 key_ttl() {
     return 86400;
   }
+  static constexpr td::int32 key_generate_period() {
+    return 3600;
+  }
 
   /* SIMPLE GETTERS */
   bool check_hashes() const {
     return check_hashes_;
   }
+  const auto &owner_address() const {
+    return owner_address_;
+  }
 
   /* SIMPLE SETTERS */
   void enable_check_hashes() {
     check_hashes_ = true;
+  }
+  void set_owner_address(block::StdAddress owner_address) {
+    owner_address_ = std::move(owner_address);
   }
 
   /* ALLOCATORS */
@@ -50,6 +66,7 @@ class KeyManagerRunner : public BaseRunner {
                                                                      TcpClient::ListeningSocketId listening_socket_id,
                                                                      const RemoteAppType &remote_app_type,
                                                                      const td::Bits256 &remote_app_hash) override {
+    LOG(ERROR) << "accepted inbound connection";
     if (!is_initialized()) {
       return nullptr;
     }
@@ -92,7 +109,7 @@ class KeyManagerRunner : public BaseRunner {
 
   /* CONTROL */
   void remove_key(td::Bits256 public_key);
-  void generate_key(bool for_proxies, bool for_workers);
+  PrivateKey *generate_key(td::uint8 key_type);
 
   /* HTTP HANDLING */
 
@@ -111,6 +128,8 @@ class KeyManagerRunner : public BaseRunner {
   std::string http_generate_key(std::string key_type);
 
  private:
+  block::StdAddress owner_address_;
+
   std::list<std::unique_ptr<PrivateKey>> private_keys_;
   bool check_hashes_{false};
 
@@ -120,6 +139,9 @@ class KeyManagerRunner : public BaseRunner {
   std::unique_ptr<td::Ed25519::PrivateKey> private_key_;
   td::Bits256 public_key_;
   std::unique_ptr<td::Ed25519::PublicKey> public_key_obj_;
+
+  std::unique_ptr<td::Ed25519::PrivateKey> wallet_private_key_;
+  td::Bits256 wallet_public_key_;
 
   td::Bits256 local_image_hash_unverified_;
 

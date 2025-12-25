@@ -104,6 +104,7 @@ class ClientRunningRequest : public td::actor::Actor {
   td::uint32 min_config_version_;
   td::actor::ActorId<ClientRunner> client_runner_;
   std::shared_ptr<ton::http::HttpPayload> out_payload_;
+  td::Bits256 encrypted_with_;
   double started_at_ = td::Clocks::monotonic();
   double started_at_unix_ = td::Clocks::system();
   double received_answer_at_unix_{0};

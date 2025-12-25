@@ -1,15 +1,14 @@
 {
   "is_test": "$IS_DEBUG",
   "is_testnet" : false,
-  "http_port" : 11000,
-  "workers_rpc_port"  : 11101,
-  "client_rpc_port"  : 11102,
+  "add_default_key" : "$IS_DEBUG",
+  "http_port" : 13000,
+  "rpc_port"  : 13101,
   "ton_config_filename": "$TON_CONFIG_FILE",
   "owner_address": "$OWNER_ADDRESS",
   "image_hash": "$TDX_IMAGE_HASH",
   "node_wallet_key": "$NODE_WALLET_KEY",
   "root_contract_address": "$ROOT_CONTRACT_ADDRESS",
   "machine_specific_private_key": "$APP_KEY",
-  "connect_to_proxy_via": "127.0.0.1:8116",
-  "db_path": "$DISK_PATH/proxy-db"
+  "db_path": "$DISK_PATH/key-manager-db"
 }

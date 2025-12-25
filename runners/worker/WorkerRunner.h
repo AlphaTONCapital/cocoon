@@ -19,7 +19,7 @@ namespace cocoon {
 
 class WorkerRunner : public BaseRunner {
  public:
-  WorkerRunner(std::string engine_config_filename) : BaseRunner(std::move(engine_config_filename)) {
+  WorkerRunner(std::string engine_config_filename) : BaseRunner(RunnerRole::Worker, std::move(engine_config_filename)) {
   }
 
   /* CONST PARAMS */
@@ -58,9 +58,6 @@ class WorkerRunner : public BaseRunner {
   bool is_disabled() const {
     return is_force_disabled_ || !uplink_ok_;
   }
-  bool need_check_proxy_hash() const {
-    return need_check_proxy_hash_;
-  }
   auto max_active_requests() const {
     return max_active_requests_;
   }
@@ -68,9 +65,6 @@ class WorkerRunner : public BaseRunner {
   /* SIMPLE SETTERS */
   void set_owner_address(block::StdAddress owner_address) {
     owner_address_ = owner_address;
-  }
-  void enable_check_proxy_hash() {
-    need_check_proxy_hash_ = true;
   }
   void set_http_ready(bool value) {
     http_is_ready_ = value;
@@ -213,7 +207,6 @@ class WorkerRunner : public BaseRunner {
   bool http_is_ready_{false};
   bool is_force_disabled_{false};
   bool uplink_ok_{false};
-  bool need_check_proxy_hash_{false};
   td::uint32 params_version_{0};
   std::shared_ptr<WorkerStats> stats_ = std::make_shared<WorkerStats>();
 

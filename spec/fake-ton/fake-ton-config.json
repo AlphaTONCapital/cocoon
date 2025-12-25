@@ -17,6 +17,7 @@
   "proxy_sc_code" : "$PROXY_SC_CODE",
   "worker_sc_code" : "$WORKER_SC_CODE",
   "client_sc_code" : "$CLIENT_SC_CODE",
-  "root_owner_address" : "0QBgPMq7ye2WRcudRHK_-yjHwMXjeN-UCzAuoo06TR6hmgHV"
+  "root_owner_address" : "0QBgPMq7ye2WRcudRHK_-yjHwMXjeN-UCzAuoo06TR6hmgHV",
+  "key_manager_address" : "127.0.0.1:13001"
 }
 

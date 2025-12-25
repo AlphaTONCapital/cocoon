@@ -2,6 +2,7 @@
 #include "ClientRunner.hpp"
 #include "auto/tl/cocoon_api.h"
 #include "checksum.h"
+#include "common/bitstring.h"
 #include "nlohmann/detail/conversions/from_json.hpp"
 #include "nlohmann/detail/conversions/to_json.hpp"
 #include "td/actor/actor.h"
@@ -12,6 +13,7 @@
 
 #include "auto/tl/cocoon_api_json.h"
 #include "cocoon-tl-utils/cocoon-tl-utils.hpp"
+#include "td/utils/misc.h"
 #include "td/utils/port/Clocks.h"
 #include "tl/TlObject.h"
 #include <utility>
@@ -49,6 +51,8 @@ void ClientRunningRequest::on_payload_downloaded(td::BufferSlice payload) {
   //max_tokens = 0;
   //max_coefficient = 0;
   double timeout = 120.0;
+
+  td::Bits256 encrypted_with;
 
   auto S = [&]() -> td::Status {
     auto b = nlohmann::json::parse(payload.as_slice().begin(), payload.as_slice().end(), nullptr, false, false);
@@ -107,6 +111,18 @@ void ClientRunningRequest::on_payload_downloaded(td::BufferSlice payload) {
       ext_request_id_ = td::sha256_bits256(b["request_guid"].get<std::string>());
       b.erase("request_guid");
     }
+    if (b.contains("encrypted_with")) {
+      if (!b["encrypted_with"].is_string()) {
+        return td::Status::Error(ton::ErrorCode::protoviolation, "field 'encrypted_with' must be a string");
+      }
+      TRY_RESULT(v, td::hex_decode(b["encrypted_with"].get<std::string>()));
+      if (v.size() != 32) {
+        return td::Status::Error(ton::ErrorCode::protoviolation,
+                                 "field 'encrypted_with' must be a hex string of 64 hex chars");
+      }
+      encrypted_with.as_slice().copy_from(v);
+      b.erase("encrypted_with");
+    }
     payload = td::BufferSlice(b.dump());
     return td::Status::OK();
   }();
@@ -114,6 +130,8 @@ void ClientRunningRequest::on_payload_downloaded(td::BufferSlice payload) {
   if (S.is_error()) {
     return return_error(S.move_as_error_prefix("failed to parse request: "), nullptr);
   }
+
+  encrypted_with_ = encrypted_with;
 
   auto r = in_request_->store_tl(td::Bits256::zero());
   auto req = cocoon::cocoon_api::make_object<cocoon_api::http_request>(
@@ -140,7 +158,7 @@ void ClientRunningRequest::on_payload_downloaded(td::BufferSlice payload) {
   } else {
     request_data_wrapped = cocoon::create_serialize_tl_object<cocoon_api::client_runQueryEx>(
         model, std::move(request_data), max_coefficient, (int)max_tokens, timeout * 0.95, request_id_,
-        min_config_version_, 1, enable_debug_);
+        min_config_version_, 1 | (proto_version_ >= 3 ? 2 : 0), enable_debug_, encrypted_with_);
   }
 
   td::actor::send_closure(client_runner_, &ClientRunner::send_message_to_connection, proxy_connection_id_,
@@ -274,7 +292,7 @@ void ClientRunningRequest::return_error_str(td::int32 ton_error_code, std::strin
   out_payload_->add_chunk(td::BufferSlice(td::Slice(data)));
   promise_.set_value(std::make_pair(std::move(response), out_payload_));
 
-  finish_request(false, nullptr);
+  finish_request(false, std::move(final_info));
 }
 
 void ClientRunningRequest::finish_request(bool is_success,
@@ -287,8 +305,13 @@ void ClientRunningRequest::finish_request(bool is_success,
     stats()->requests_failed++;
   }
   stats()->total_requests_time += run_time();
-  stats()->total_worker_requests_time += (final_info->worker_end_time_ - final_info->worker_start_time_);
-  stats()->total_proxy_requests_time += (final_info->proxy_end_time_ - final_info->proxy_start_time_);
+  if (final_info) {
+    stats()->total_worker_requests_time += (final_info->worker_end_time_ - final_info->worker_start_time_);
+    stats()->total_proxy_requests_time += (final_info->proxy_end_time_ - final_info->proxy_start_time_);
+  } else {
+    stats()->total_worker_requests_time += run_time();
+    stats()->total_proxy_requests_time += run_time();
+  }
 
   CHECK(!promise_);
   out_payload_->complete_parse();

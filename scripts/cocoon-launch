@@ -680,6 +680,7 @@ def run_local_all(cfg):
         ('proxy', 'ProxyProxyProxyProxyProxyProxyProxyProxyPro=', 'ml+7xELuOQtfp9q9mSWtHiSWx5aSBV6p3xCfwPmHOwY='),
         ('worker', 'WorkerWorkerWorkerWorkerWorkerWorkerWorkerU=', 'jYYD/HjU0K2D/xpistoFM4BruJhY3koI1xuO00xd7PI='),
         ('client', 'ClientClientClientClientClientClientClientC=', 'gaEatwGNgLGOeFI/TRGfPdJG/K4G8picYHQkDHpLQ9w='),
+        ('key-manager', 'KeyManagerKeyManagerKeyManagerKeyManagerKe0=', '4DV6iMUS16P6Y/6MlF6qfnxii7q2UWXUwSi4bgvcaf8='),
     ]:
         cfg = Config(
             node_type=node_type,
@@ -768,10 +769,21 @@ def run_local_all(cfg):
     t.start()
     threads.append(t)
 
+    # Key Manager (magenta)
+    key_manager_proc = popen(
+        [f'{cfg.build_dir}/key-manager-runner', '--config', '/tmp/run/key-manager-config.json', '-v3', '--disable-ton',
+         '/tmp/run/fake-ton-config.json'],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    procs.append(client_proc)
+    t = threading.Thread(target=stream_output, args=(key_manager_proc, 'KEYMANAGER', '35'), daemon=True)
+    t.start()
+    threads.append(t)
+
     # Proxy-cli (cyan)
     proxycli_proc = popen([f'{cfg.build_dir}/tee/router', '-S', '8116@any',
                            '-R', '11001:127.0.0.1:11101@any',
                            '-R', '11002:127.0.0.1:11102@any',
+                           '-R', '13001:127.0.0.1:13101@any',
                            '--serialize-info'],
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     procs.append(proxycli_proc)

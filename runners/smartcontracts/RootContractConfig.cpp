@@ -26,6 +26,26 @@
 
 namespace cocoon {
 
+static bool fetch_net_addr(vm::CellSlice &cs, std::string &r) {
+  bool v;
+  if (!cs.fetch_bool_to(v) || v) {
+    return false;
+  }
+  td::uint32 bytes;
+  if (!cs.fetch_uint_to(7, bytes)) {
+    return false;
+  }
+
+  auto old_r = std::move(r);
+  r.resize(bytes);
+  if (!cs.fetch_bytes(td::MutableSlice(r))) {
+    r = std::move(old_r);
+    return false;
+  }
+
+  return true;
+}
+
 static bool parse_address(td::Slice host_port, td::IPAddress &dst) {
   if (host_port.size() == 0) {
     LOG(ERROR) << "failed to parse '" << host_port << "' as address";
@@ -85,7 +105,7 @@ td::Result<std::unique_ptr<RootContractConfig>> RootContractConfig::load_from_st
       return td::Status::Error("cannot fetch struct_version");
     }
 
-    if (struct_version > 3) {
+    if (struct_version > 4) {
       return td::Status::Error(PSTRING() << "unexpected params struct version: " << struct_version);
     }
 
@@ -219,27 +239,17 @@ td::Result<std::unique_ptr<RootContractConfig>> RootContractConfig::load_from_st
             if (!t.is_valid()) {
               return false;
             }
-            if (t[0] != false) {
-              LOG(ERROR) << "skipping proxy entry: only type 0 is supported";
+
+            std::string buf;
+            if (!fetch_net_addr(value.write(), buf)) {
+              LOG(ERROR) << "cannot parse addr";
               return true;  // only support ipv4 for now
             }
-
-            td::uint32 len;
-            if (!value.write().fetch_uint_to(7, len)) {
-              return false;
-            }
-            CHECK(len <= 127);
-
-            unsigned char buf[256];
-            if (!value.write().fetch_bytes(buf, len)) {
-              return false;
-            }
-            buf[len] = 0;
 
             ProxyInfo w;
             w.seqno = (td::uint32)key.get_uint(32);
 
-            auto addr = td::Slice((char *)buf, len);
+            auto addr = td::Slice(buf);
             auto x = addr.find(' ');
             if (x == td::Slice::npos) {
               if (!parse_address(addr, w.address_for_workers)) {
@@ -309,6 +319,61 @@ td::Result<std::unique_ptr<RootContractConfig>> RootContractConfig::load_from_st
       return td::Status::Error("cannot fetch version");
     }
 
+    std::map<td::Bits256, RootContractPublicKeyInfo> public_keys;
+    td::Bits256 key_manager_public_key = td::Bits256::zero();
+    td::Bits256 key_manager_image_hash = td::Bits256::zero();
+    std::string key_manager_addr_str = "";
+    td::IPAddress key_manager_addr;
+    if (struct_version >= 4) {
+      auto key_manager_cell = cell_slice.fetch_ref();
+      vm::CellSlice km_cs{vm::NoVm{}, key_manager_cell};
+      if (!km_cs.fetch_bool_to(exist_bit)) {
+        return td::Status::Error("failed to get dict exist bit");
+      }
+      if (exist_bit) {
+        vm::Dictionary public_keys_dict(km_cs.fetch_ref(), 256);
+        if (!public_keys_dict.check_for_each([&](td::Ref<vm::CellSlice> value, td::ConstBitPtr key, int key_len) {
+              CHECK(key_len == 256);
+              td::Bits256 public_key(key);
+              RootContractPublicKeyInfo v;
+              td::uint32 key_type;
+              if (!value.write().fetch_uint_to(8, key_type)) {
+                return false;
+              }
+              v.key_type = (td::uint8)key_type;
+              if (!value.write().fetch_uint_to(32, v.expire_at)) {
+                return false;
+              }
+              if (!value.write().empty_ext()) {
+                return false;
+              }
+              CHECK(public_keys.emplace(public_key, std::move(v)).second);
+              return true;
+            })) {
+          return td::Status::Error("failed to iterate public keys dict");
+        }
+      }
+      if (!km_cs.fetch_bytes(key_manager_public_key.as_slice())) {
+        return td::Status::Error("failed to get key manager public key");
+      }
+      if (!km_cs.fetch_bytes(key_manager_image_hash.as_slice())) {
+        return td::Status::Error("failed to get key manager image hash");
+      }
+      if (!fetch_net_addr(km_cs, key_manager_addr_str)) {
+        return td::Status::Error("failed to get key manager addr");
+      }
+      if (key_manager_addr_str.size() == 0) {
+        key_manager_addr = td::IPAddress();
+      } else {
+        if (!parse_address(key_manager_addr_str, key_manager_addr)) {
+          return td::Status::Error(PSTRING() << "failed to parse '" << key_manager_addr_str << " as IP address");
+        }
+      }
+      if (!km_cs.empty_ext()) {
+        return td::Status::Error("extra data in key manager data");
+      }
+    }
+
     if (!cell_slice.empty_ext()) {
       return td::Status::Error("extra data in root contract");
     }
@@ -346,6 +411,10 @@ td::Result<std::unique_ptr<RootContractConfig>> RootContractConfig::load_from_st
     config->client_delay_before_close_ = client_delay_before_close;
     config->min_proxy_stake_ = min_proxy_stake;
     config->min_client_stake_ = min_client_stake;
+    config->public_keys_ = std::move(public_keys);
+    config->key_manager_public_key_ = key_manager_public_key;
+    config->key_manager_image_hash_ = key_manager_image_hash;
+    config->key_manager_addr_ = key_manager_addr;
     //config->proxy_contract_info_;
     //config->worker_contract_info_;
     //config->client_contract_info_;
@@ -429,6 +498,19 @@ td::Result<std::unique_ptr<RootContractConfig>> RootContractConfig::load_from_tl
   config->client_delay_before_close_ = 300;
   config->min_proxy_stake_ = to_nano(1);
   config->min_client_stake_ = to_nano(1);
+  for (auto &p : conf.registered_public_keys_) {
+    struct RootContractPublicKeyInfo info;
+    info.expire_at = p->expire_at_;
+    info.key_type = (td::uint8)p->key_type_;
+    config->public_keys_.emplace(p->public_key_, std::move(info));
+  }
+  if (conf.key_manager_address_.size() == 0) {
+    config->key_manager_addr_ = td::IPAddress();
+  } else {
+    if (!parse_address(conf.key_manager_address_, config->key_manager_addr_)) {
+      return td::Status::Error("cannot deserialize key manager address");
+    }
+  }
   if (!rdeserialize(config->owner_, conf.root_owner_address_, is_testnet)) {
     return td::Status::Error("cannot deserialize root owner address");
   }
@@ -499,6 +581,103 @@ td::Result<std::unique_ptr<RootContractConfig>> RootContractConfig::load_from_tl
   config->client_delay_before_close_ = conf.client_delay_before_close_;
   config->min_proxy_stake_ = conf.min_proxy_stake_;
   config->min_client_stake_ = conf.min_client_stake_;
+  config->key_manager_public_key_ = td::Bits256::zero();
+  config->key_manager_image_hash_ = td::Bits256::zero();
+  config->key_manager_addr_ = td::IPAddress();
+
+  auto deserialize_boc = [](td::Slice data) -> td::Result<td::Ref<vm::Cell>> {
+    if (data.size() == 0) {
+      return vm::CellBuilder().finalize_novm();
+    }
+    TRY_RESULT(s, td::hex_decode(data));
+    return vm::std_boc_deserialize(s);
+  };
+
+  TRY_RESULT_ASSIGN(config->proxy_sc_code_, deserialize_boc(conf.proxy_sc_code_));
+  TRY_RESULT_ASSIGN(config->worker_sc_code_, deserialize_boc(conf.worker_sc_code_));
+  TRY_RESULT_ASSIGN(config->client_sc_code_, deserialize_boc(conf.client_sc_code_));
+
+  return config;
+}
+
+td::Result<std::unique_ptr<RootContractConfig>> RootContractConfig::load_from_tl(
+    const cocoon_api::rootConfig_configV6 &conf, bool is_testnet) {
+  std::unique_ptr<RootContractConfig> config = std::make_unique<RootContractConfig>();
+
+  if (!rdeserialize(config->owner_, conf.root_owner_address_, is_testnet)) {
+    return td::Status::Error("cannot deserialize root owner address");
+  }
+
+  for (auto &h : conf.proxy_hashes_) {
+    config->accepted_proxy_hashes_.push_back(h);
+  }
+  std::sort(config->accepted_proxy_hashes_.begin(),
+            config->accepted_proxy_hashes_.end());  // should be sorted, but...
+
+  for (auto &p : conf.registered_proxies_) {
+    ProxyInfo w;
+    w.seqno = (td::uint32)p->seqno_;
+    auto addr = td::Slice(p->address_);
+    auto x = addr.find(' ');
+    if (x == td::Slice::npos) {
+      if (!parse_address(addr, w.address_for_workers)) {
+        return td::Status::Error("cannot parse address");
+      }
+      w.address_for_clients = w.address_for_workers;
+    } else {
+      if (!parse_address(addr.copy().truncate(x), w.address_for_workers)) {
+        return td::Status::Error("cannot parse address");
+      }
+      if (!parse_address(addr.copy().remove_prefix(x + 1), w.address_for_clients)) {
+        return td::Status::Error("cannot parse address");
+      }
+    }
+    config->proxies_.push_back(std::move(w));
+  }
+
+  config->last_proxy_seqno_ = conf.last_proxy_seqno_;
+
+  for (auto &w : conf.worker_hashes_) {
+    config->workers_.emplace_back(w);
+  }
+  std::sort(config->workers_.begin(), config->workers_.end());
+
+  for (auto &w : conf.model_hashes_) {
+    config->models_.emplace_back(w);
+  }
+  std::sort(config->models_.begin(), config->models_.end());
+
+  config->version_ = conf.version_;
+
+  config->struct_version_ = (td::uint8)conf.struct_version_;
+  config->params_version_ = conf.params_version_;
+  config->unique_id_ = conf.unique_id_;
+  config->is_test_ = (bool)conf.is_test_;
+  config->price_per_token_ = conf.price_per_token_;
+  config->worker_fee_per_token_ = conf.worker_fee_per_token_;
+  config->prompt_tokens_price_multiplier_ = conf.prompt_tokens_price_multiplier_;
+  config->cached_tokens_price_multiplier_ = conf.cached_tokens_price_multiplier_;
+  config->completion_tokens_price_multiplier_ = conf.completion_tokens_price_multiplier_;
+  config->reasoning_tokens_price_multiplier_ = conf.reasoning_tokens_price_multiplier_;
+  config->proxy_delay_before_close_ = conf.proxy_delay_before_close_;
+  config->client_delay_before_close_ = conf.client_delay_before_close_;
+  config->min_proxy_stake_ = conf.min_proxy_stake_;
+  config->min_client_stake_ = conf.min_client_stake_;
+  for (auto &p : conf.registered_public_keys_) {
+    struct RootContractPublicKeyInfo info;
+    info.expire_at = p->expire_at_;
+    info.key_type = (td::uint8)p->key_type_;
+    config->public_keys_.emplace(p->public_key_, std::move(info));
+  }
+  config->key_manager_public_key_ = conf.key_manager_public_key_;
+  config->key_manager_image_hash_ = conf.key_manager_image_hash_;
+  if (conf.key_manager_address_.size() == 0) {
+    config->key_manager_addr_ = td::IPAddress();
+  } else {
+    if (!parse_address(conf.key_manager_address_, config->key_manager_addr_)) {
+      return td::Status::Error("cannot deserialize key manager address");
+    }
+  }
 
   auto deserialize_boc = [](td::Slice data) -> td::Result<td::Ref<vm::Cell>> {
     if (data.size() == 0) {

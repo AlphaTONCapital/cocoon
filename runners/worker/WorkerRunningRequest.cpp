@@ -71,7 +71,8 @@ void WorkerRunningRequest::start_request() {
   std::unique_ptr<ton::http::HttpRequest> request;
   auto S = [&]() {
     std::string model;
-    TRY_RESULT(new_payload, validate_modify_request(req->url_, std::move(req->payload_), &model, nullptr));
+    TRY_RESULT(new_payload,
+               validate_modify_request(req->url_, std::move(req->payload_), &model, nullptr, nullptr, false));
     if (model != model_base_name_) {
       return td::Status::Error(ton::ErrorCode::protoviolation, "model name mismatch");
     }
@@ -161,8 +162,6 @@ void WorkerRunningRequest::send_error(td::Status error) {
     return;
   }
   LOG(WARNING) << "worker request " << proxy_request_id_.to_hex() << " failed: " << error;
-
-  stats()->requests_failed++;
 
   if (proto_version_ == 0) {
     if (!sent_answer_) {
