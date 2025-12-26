@@ -235,11 +235,6 @@ td::Result<std::unique_ptr<RootContractConfig>> RootContractConfig::load_from_st
     if (exist_bit) {
       vm::Dictionary proxies_dict(data.fetch_ref(), 32);
       if (!proxies_dict.check_for_each([&](td::Ref<vm::CellSlice> value, td::ConstBitPtr key, int key_len) {
-            auto t = value.write().fetch_bits(1);
-            if (!t.is_valid()) {
-              return false;
-            }
-
             std::string buf;
             if (!fetch_net_addr(value.write(), buf)) {
               LOG(ERROR) << "cannot parse addr";
