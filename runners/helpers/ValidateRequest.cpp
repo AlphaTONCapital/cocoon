@@ -970,11 +970,6 @@ void encrypt_json(nlohmann::json &v, const td::Bits256 &private_key, const td::B
 td::Status decrypt_json(nlohmann::json &v, const td::Bits256 &private_key, td::Bits256 &public_key,
                         bool check_public_key, bool client_to_worker) {
   bool is_encrypted = v.contains("is_encrypted");
-  for (const auto &s : json_encryption_related_str_fields) {
-    if (!v.contains(s) || !v[s].is_string()) {
-      return td::Status::Error(ton::ErrorCode::error, "not all encryption-related fields are present");
-    }
-  }
   if (!is_encrypted) {
     if (!private_key.is_zero()) {
       return td::Status::Error(ton::ErrorCode::error, "encryption key is provided, but request is unencrypted");
@@ -988,6 +983,12 @@ td::Status decrypt_json(nlohmann::json &v, const td::Bits256 &private_key, td::B
       }
     }
     return td::Status::OK();
+  }
+
+  for (const auto &s : json_encryption_related_str_fields) {
+    if (!v.contains(s) || !v[s].is_string()) {
+      return td::Status::Error(ton::ErrorCode::error, "not all encryption-related fields are present");
+    }
   }
 
   TRY_RESULT(sender_public_key, parse_bits256_from_json(v["sender_public_key"].get<std::string>()));
