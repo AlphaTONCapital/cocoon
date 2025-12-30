@@ -523,6 +523,11 @@ static td::Status process_stream_options(Ctx &ctx) {
   return td::Status::OK();
 }
 
+static td::Status process_chat_template_kwargs(Ctx &ctx) {
+  TRY_STATUS(ctx.process_obj_field("enable_thinking", false, process_boolean));
+  return td::Status::OK();
+}
+
 static td::Status process_chat_completions(Ctx &ctx) {
   std::string model;
   td::int64 max_completion_tokens = 0;
@@ -621,6 +626,7 @@ static td::Status process_chat_completions(Ctx &ctx) {
     TRY_STATUS(ctx.process_obj_field("web_search_options", false, [](Ctx &ctx) { return td::Status::OK(); }));
   }
   TRY_STATUS(ctx.process_obj_field("skip_special_tokens", false, process_boolean)); /* non-standard */
+  TRY_STATUS(ctx.process_obj_field("chat_template_kwargs", false, process_chat_template_kwargs));
 
   auto &obj = *ctx.obj();
 
