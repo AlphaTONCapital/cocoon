@@ -220,7 +220,7 @@ class HttpSession : public std::enable_shared_from_this<HttpSession> {
   void send_headers(http::status status, std::string content_type,
                     std::vector<std::pair<std::string, std::string>> headers) {
     res_.version(req_.version());
-    res_.result(http::status::ok);
+    res_.result((http::status)status);
     res_.set(http::field::server, "cocoon-client");
     if (content_type.size() > 0) {
       res_.set(http::field::content_type, content_type);
