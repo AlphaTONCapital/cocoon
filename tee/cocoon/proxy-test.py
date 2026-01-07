@@ -1,4 +1,10 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "paramiko", "requests[socks]"
+# ]
+# ///
 """
 proxy-test.py  –  local or hybrid (local+SSH) test harness using unified router
 

@@ -403,6 +403,10 @@ def cmd_eval(args):
     task_name = getattr(args, 'task', 'translate') or 'translate'
     task_labels = None
     
+    if task_name == 'audio_langid':
+        # Audio language identification - special handling
+        return cmd_eval_audio_langid(args, cache, num_samples, verbose)
+    
     if task_name == 'summarize':
         lang = getattr(args, 'lang', 'en') or 'en'
         tasks = [get_task("summarize", lang=lang)]
@@ -469,4 +473,90 @@ def cmd_eval(args):
     if output:
         with open(output, 'w') as f:
             json.dump(all_results, f, indent=2)
+        print(f"\nResults saved to {output}")
+
+
+def cmd_eval_audio_langid(args, cache: TaskCache, num_samples: int, verbose: bool):
+    """Evaluate audio language identification with per-language metrics."""
+    from mt.tasks import get_task
+    from mt.tasks.audio_langid import AudioLangIdTask
+    
+    audio_dir = getattr(args, 'audio_dir', None)
+    langs_str = getattr(args, 'langs', None)
+    langs = [l.strip() for l in langs_str.split(',')] if langs_str else None
+    
+    # If no audio_dir but langs specified, use Common Voice
+    if not audio_dir and not langs:
+        sys.exit(
+            "Either --audio-dir or --langs is required for audio_langid.\n\n"
+            "Option 1: Use local audio files:\n"
+            "  ./mt eval --task audio_langid --audio-dir ./audio_data\n"
+            "  (Expected structure: audio_dir/{lang}/*.wav)\n\n"
+            "Option 2: Download from Common Voice dataset:\n"
+            "  ./mt eval --task audio_langid --langs en,ru,zh,de,fr -n 50"
+        )
+    
+    print(f"\n{'='*70}")
+    print(f"Audio Language Identification Evaluation")
+    print(f"{'='*70}")
+    if audio_dir:
+        print(f"Audio directory: {audio_dir}")
+    else:
+        print(f"Data source: Common Voice (fixie-ai/common_voice_17_0)")
+    if langs:
+        print(f"Languages: {', '.join(langs)}")
+    print(f"Samples per language: {num_samples}")
+    
+    # Create task
+    audio_model = getattr(args, 'audio_model', 'speechbrain') or 'speechbrain'
+    task = AudioLangIdTask(model=audio_model, audio_dir=audio_dir, langs=langs, top_k=5)
+    print(f"Model: {audio_model}")
+    
+    # Load samples
+    try:
+        samples = task.load_eval_data(n=num_samples)
+    except Exception as e:
+        sys.exit(f"Failed to load audio data: {e}")
+    
+    # Run predictions
+    outputs = []
+    for i, sample in enumerate(samples):
+        lang = sample.meta.get("lang", "?")
+        print(f"[{i+1}/{len(samples)}] {lang}: {sample.meta.get('file', '?')}", end=" ")
+        try:
+            result = task.run(sample.input, config=None)
+            outputs.append(result.output)
+            
+            # Show prediction with color
+            pred = result.output
+            correct = pred.lower() == sample.reference.lower()
+            if correct:
+                print(f"→ {pred} ✓")
+            else:
+                print(f"→ {pred} ✗ (expected {sample.reference})")
+        except Exception as e:
+            outputs.append(None)
+            print(f"→ ERROR: {e}")
+            if verbose:
+                import traceback
+                traceback.print_exc()
+    
+    # Compute and print per-language metrics
+    task.print_eval_report(samples, outputs)
+    
+    # Get metrics for saving
+    scores = task.compute_scores(samples, outputs)
+    metrics = task.aggregate_scores(scores)
+    
+    # Save results
+    output = getattr(args, 'output', 'audio_langid_results.json')
+    if output:
+        full_metrics = {
+            "overall": metrics,
+            "per_lang_detailed": task.compute_per_language_metrics(samples, outputs),
+            "samples_per_lang": num_samples,
+            "audio_dir": audio_dir,
+        }
+        with open(output, 'w') as f:
+            json.dump(full_metrics, f, indent=2)
         print(f"\nResults saved to {output}")
