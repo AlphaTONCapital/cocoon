@@ -70,8 +70,8 @@ void WorkerRunner::receive_request(WorkerProxyInfo &proxy, TcpClient::Connection
 
   td::actor::create_actor<WorkerRunningRequest>(
       PSTRING() << "request_" << req.request_id_.to_hex(), req.request_id_, connection_id, std::move(req.query_),
-      req.private_key_, req.timeout_, model_base_name(), req.coefficient_, proto_version,
-      (req.flags_ & 1) && req.enable_debug_, proxy.sc()->runner_config(), actor_id(this), stats_)
+      req.private_key_, req.timeout_, forward_requests_to_, model_base_name(), req.coefficient_, proto_version,
+      (req.flags_ & 1) && req.enable_debug_, proxy.sc()->runner_config(), actor_id(this), scheduler(), stats_)
       .release();
 }
 

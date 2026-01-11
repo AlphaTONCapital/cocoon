@@ -314,6 +314,9 @@ set(COMMON_SOURCE
  runners/helpers/ValidateRequest.cpp
 
  boost-http/http.cpp
+ boost-http/http-client.cpp
+
+ third-party/multipart-parser-c/multipart_parser.c
 )
 
 set(JSON_BuildTests OFF CACHE INTERNAL "")
@@ -323,7 +326,7 @@ find_package(Boost REQUIRED COMPONENTS system thread)
 
 
 set(COMMON_LIBRARIES
-  tdutils tdactor tdnet tddb cocoon_tl_api tl_api cocoon-tl-utils tonhttp tonlib tdnet_ported cocoon git nlohmann_json::nlohmann_json Boost::system Boost::thread
+  tdutils tdactor tdnet tddb cocoon_tl_api tl_api cocoon-tl-utils tonhttp tonlib tdnet_ported cocoon git nlohmann_json::nlohmann_json Boost::system Boost::thread 
 )
 
 add_library(cocoon_common ${COMMON_SOURCE})

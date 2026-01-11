@@ -1,6 +1,7 @@
 #include "WorkerRunningRequest.hpp"
 #include "WorkerRunner.h"
 #include "auto/tl/cocoon_api.h"
+#include "boost-http/http.h"
 #include "common/bitstring.h"
 #include "errorcode.h"
 #include "http/http.h"
@@ -12,29 +13,37 @@
 #include "td/actor/actor.h"
 #include "td/utils/Random.h"
 #include "td/utils/JsonBuilder.h"
+#include "td/utils/Status.h"
 #include "td/utils/Time.h"
 #include "td/utils/buffer.h"
 #include "td/utils/port/Clocks.h"
 #include "tl-utils/common-utils.hpp"
 #include "tl/TlObject.h"
+#include "boost-http/http-client.h"
 #include <nlohmann/json.hpp>
 #include <memory>
+#include <vector>
 
 namespace cocoon {
+
 WorkerRunningRequest::WorkerRunningRequest(td::Bits256 proxy_request_id, TcpClient::ConnectionId proxy_connection_id,
                                            td::BufferSlice data, td::Bits256 worker_private_key, double timeout,
-                                           std::string model_base_name, td::int32 coefficient, td::int32 proto_version,
-                                           bool enable_debug, std::shared_ptr<RunnerConfig> runner_config,
-                                           td::actor::ActorId<WorkerRunner> runner, std::shared_ptr<WorkerStats> stats)
+                                           td::IPAddress http_server_address, std::string model_base_name,
+                                           td::int32 coefficient, td::int32 proto_version, bool enable_debug,
+                                           std::shared_ptr<RunnerConfig> runner_config,
+                                           td::actor::ActorId<WorkerRunner> runner, td::actor::Scheduler *scheduler,
+                                           std::shared_ptr<WorkerStats> stats)
     : proxy_request_id_(proxy_request_id)
     , proxy_connection_id_(proxy_connection_id)
     , data_(std::move(data))
     , timeout_(timeout)
+    , http_server_address_(http_server_address)
     , model_base_name_(std::move(model_base_name))
     , coefficient_(coefficient)
     , proto_version_(proto_version)
     , enable_debug_(enable_debug)
     , runner_(runner)
+    , scheduler_(scheduler)
     , stats_(std::move(stats)) {
   worker_private_key_ = worker_private_key;
   runner_config_ = runner_config;
@@ -67,10 +76,36 @@ void WorkerRunningRequest::start_request() {
   static const std::string v_stream_options = "stream_options";
   static const std::string v_include_usage = "include_usage";
 
+  td::BufferSlice new_payload;
+
   std::unique_ptr<ton::http::HttpRequest> request;
+  http::HttpCallback::RequestType request_type;
+  std::string url;
+  std::vector<std::pair<std::string, std::string>> headers;
   auto S = [&]() {
+    if (req->method_ == "POST" || req->method_ == "post" || req->payload_.size() > 0) {
+      request_type = http::HttpCallback::RequestType::Post;
+    } else {
+      request_type = http::HttpCallback::RequestType::Get;
+    }
+
+    url = req->url_;
+
+    std::string content_type;
+    for (auto &h : req->headers_) {
+      auto name_copy = h->name_;
+      std::transform(name_copy.begin(), name_copy.end(), name_copy.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      if (name_copy == "content-type") {
+        content_type = h->value_;
+      }
+      if (name_copy == "content-length" || name_copy == "transfer-encoding" || name_copy == "connection") {
+        continue;
+      }
+      headers.emplace_back(h->name_, h->value_);
+    }
     std::string model;
-    TRY_RESULT(new_payload, validate_decrypt_request(req->url_, std::move(req->payload_), &model, nullptr,
+    TRY_RESULT(new_payload, validate_decrypt_request(req->url_, content_type, std::move(req->payload_), &model, nullptr,
                                                      worker_private_key_, &client_public_key_));
     if (model != model_base_name_) {
       return td::Status::Error(ton::ErrorCode::protoviolation, "model name mismatch");
@@ -107,59 +142,37 @@ void WorkerRunningRequest::start_request() {
   LOG(INFO) << "working request " << proxy_request_id_.to_hex() << ": sending request to url " << req->url_
             << " method=" << req->method_;
 
-  auto payload = request->create_empty_payload().move_as_ok();
-  payload->add_chunk(std::move(req->payload_));
-  payload->complete_parse();
-
-  auto P = td::PromiseCreator::lambda(
-      [self_id = actor_id(this)](
-          td::Result<std::pair<std::unique_ptr<ton::http::HttpResponse>, std::shared_ptr<ton::http::HttpPayload>>>
-              R) mutable {
-        if (R.is_error()) {
-          td::actor::send_closure(self_id, &WorkerRunningRequest::send_error,
-                                  R.move_as_error_prefix("worker: http failed: "));
-        } else {
-          td::actor::send_closure(self_id, &WorkerRunningRequest::process_request_response, R.move_as_ok());
-        }
-      });
-
-  td::actor::send_closure(runner_, &WorkerRunner::send_http_request, std::move(request), std::move(payload),
-                          td::Timestamp::in(timeout_ * 0.95), std::move(P));
-}
-
-void WorkerRunningRequest::process_request_response(
-    std::pair<std::unique_ptr<ton::http::HttpResponse>, std::shared_ptr<ton::http::HttpPayload>> res) {
-  auto response = std::move(res.first);
-  auto payload = std::move(res.second);
-  received_answer_at_unix_ = td::Clocks::system();
-  if (payload->payload_type() == ton::http::HttpPayload::PayloadType::pt_empty) {
-    send_answer(std::move(response), td::BufferSlice(), true);
-    return;
-  }
-
-  send_answer(std::move(response), td::BufferSlice(), false);
-
-  class Cb : public HttpPayloadCbReceiver::Cb {
+  class Cb : public http::HttpRequestCallback {
    public:
-    Cb(td::actor::ActorId<WorkerRunningRequest> self_id) : self_id_(self_id) {
+    Cb(td::actor::ActorId<WorkerRunningRequest> self, td::actor::Scheduler *scheduler)
+        : self_(self), scheduler_(scheduler) {
     }
-    void data_chunk(td::BufferSlice buffer, bool is_finished) override {
-      td::actor::send_closure(self_id_, &WorkerRunningRequest::send_payload_part, std::move(buffer), is_finished);
+    void receive_answer(td::int32 status_code, std::string content_type,
+                        std::vector<std::pair<std::string, std::string>> headers, std::string body_part = "",
+                        bool is_completed = false) override {
+      scheduler_->run_in_context([&]() {
+        td::actor::send_closure(self_, &WorkerRunningRequest::process_request_response, status_code, std::move(headers),
+                                body_part, is_completed);
+      });
     }
-    void error(td::Status error) override {
-      td::actor::send_closure(self_id_, &WorkerRunningRequest::send_error,
-                              error.move_as_error_prefix("worker: failed to get payload: "));
+    void receive_payload_part(std::string body_part, bool is_completed) override {
+      scheduler_->run_in_context(
+          [&]() { td::actor::send_closure(self_, &WorkerRunningRequest::send_payload_part, body_part, is_completed); });
     }
 
    private:
-    td::actor::ActorId<WorkerRunningRequest> self_id_;
+    td::actor::ActorId<WorkerRunningRequest> self_;
+    td::actor::Scheduler *scheduler_;
   };
+  http::run_http_request(http_server_address_, request_type, std::move(url), std::move(headers),
+                         new_payload.as_slice().str(), timeout_ * 0.95,
+                         std::make_unique<Cb>(actor_id(this), scheduler_));
+}
 
-  auto cb = std::make_unique<Cb>(actor_id(this));
-
-  td::actor::create_actor<HttpPayloadCbReceiver>("payloadreceiver", std::move(payload), std::move(cb),
-                                                 td::Timestamp::in(timeout_ * 0.95))
-      .release();
+void WorkerRunningRequest::process_request_response(td::int32 status_code,
+                                                    std::vector<std::pair<std::string, std::string>> headers,
+                                                    std::string payload_part, bool payload_is_completed) {
+  send_answer(status_code, std::move(headers), std::move(payload_part), payload_is_completed);
 }
 
 void WorkerRunningRequest::send_error(td::Status error) {
@@ -177,14 +190,14 @@ void WorkerRunningRequest::send_error(td::Status error) {
   finish_request(false);
 }
 
-void WorkerRunningRequest::send_answer(std::unique_ptr<ton::http::HttpResponse> response, td::BufferSlice orig_payload,
-                                       bool payload_is_completed) {
+void WorkerRunningRequest::send_answer(td::int32 status_code, std::vector<std::pair<std::string, std::string>> headers,
+                                       std::string orig_payload, bool payload_is_completed) {
   if (completed_) {
     return;
   }
   LOG(DEBUG) << "worker request " << proxy_request_id_.to_hex() << ": starting sending answer";
 
-  auto payload_to_send = postprocessor_->add_next_answer_slice(orig_payload.as_slice());
+  auto payload_to_send = postprocessor_->add_next_answer_slice(orig_payload);
   if (payload_is_completed) {
     payload_to_send = payload_to_send + postprocessor_->finalize();
   }
@@ -195,20 +208,18 @@ void WorkerRunningRequest::send_answer(std::unique_ptr<ton::http::HttpResponse> 
     payload_bytes_ += payload_to_send.size();
   }
 
-  auto r = response->store_tl();
-
   //http.response http_version:string status_code:int reason:string headers:(vector http.header) payload:bytes = http.Response;
   auto res = cocoon::cocoon_api::make_object<cocoon_api::http_response>(
-      r->http_version_, r->status_code_, r->reason_, std::vector<ton::tl_object_ptr<cocoon_api::http_header>>(),
+      "HTTP/1.1", status_code, "", std::vector<ton::tl_object_ptr<cocoon_api::http_header>>{},
       td::BufferSlice(payload_to_send));
 
-  for (auto &h : r->headers_) {
-    auto name = h->name_;
+  for (auto &h : headers) {
+    auto name = h.first;
     std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
-    if (h->name_ == "content-length" || h->name_ == "transfer-encoding" || h->name_ == "connection") {
+    if (name == "content-length" || name == "transfer-encoding" || name == "connection") {
       continue;
     }
-    res->headers_.push_back(cocoon::cocoon_api::make_object<cocoon_api::http_header>(h->name_, h->value_));
+    res->headers_.push_back(cocoon::cocoon_api::make_object<cocoon_api::http_header>(h.first, h.second));
   }
 
   // Add debug timing headers using Unix timestamps
@@ -237,7 +248,7 @@ void WorkerRunningRequest::send_answer(std::unique_ptr<ton::http::HttpResponse> 
   }
 }
 
-void WorkerRunningRequest::send_payload_part(td::BufferSlice orig_payload_part, bool payload_is_completed) {
+void WorkerRunningRequest::send_payload_part(std::string orig_payload_part, bool payload_is_completed) {
   if (completed_) {
     return;
   }
@@ -246,11 +257,13 @@ void WorkerRunningRequest::send_payload_part(td::BufferSlice orig_payload_part, 
   CHECK(sent_answer_);
   CHECK(!completed_);
 
-  auto payload_to_send = postprocessor_->add_next_answer_slice(orig_payload_part.as_slice());
+  LOG(ERROR) << "orig_size=" << orig_payload_part.size() << " " << orig_payload_part;
+  auto payload_to_send = postprocessor_->add_next_answer_slice(orig_payload_part);
   if (payload_is_completed) {
     payload_to_send = payload_to_send + postprocessor_->finalize();
   }
 
+  LOG(ERROR) << "end_size=" << payload_to_send.size();
   if (!payload_to_send.size() && !payload_is_completed) {
     return;
   }

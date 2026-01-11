@@ -15,12 +15,18 @@ void encrypt_json(nlohmann::json &value, const td::Bits256 &private_key, const t
                   bool client_to_worker);
 td::Status decrypt_json(nlohmann::json &value, const td::Bits256 &private_key, td::Bits256 &public_key,
                         bool check_public_key, bool client_to_worker);
+td::Status decrypt_form(std::map<std::string, std::string> &value, const td::Bits256 &private_key,
+                        td::Bits256 &public_key, bool check_public_key, bool client_to_worker);
 
-td::Result<td::BufferSlice> validate_decrypt_request(std::string url, td::BufferSlice request, std::string *model,
-                                                     td::int64 *max_tokens, const td::Bits256 &private_key,
-                                                     td::Bits256 *client_public_key);
+td::Result<td::BufferSlice> validate_decrypt_request(std::string url, td::Slice content_type, td::BufferSlice request,
+                                                     std::string *model, td::int64 *max_tokens,
+                                                     const td::Bits256 &private_key, td::Bits256 *client_public_key);
 td::Result<td::BufferSlice> validate_encrypt_answer_part(std::string url, td::BufferSlice request, std::string *model,
                                                          td::int64 *max_tokens, const td::Bits256 *private_key);
+td::Result<std::string> validate_client_request(td::Slice url, td::Slice content_type, td::Slice request,
+                                                std::string *model, td::int64 *max_tokens, td::int32 *max_coefficient,
+                                                double *timeout, bool *enable_debug, td::Bits256 *request_guid,
+                                                td::Bits256 *receiver_public_key);
 
 class AnswerPostprocessor {
  public:

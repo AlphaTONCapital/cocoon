@@ -27,11 +27,21 @@ namespace cocoon {
 void ClientRunningRequest::start_up() {
   LOG(INFO) << "client request " << request_id_.to_hex() << ": starting";
 
+  std::string content_type;
+  for (auto &h : in_request_headers_) {
+    auto name_copy = h.first;
+    std::transform(name_copy.begin(), name_copy.end(), name_copy.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    if (name_copy == "content-type") {
+      content_type = h.second;
+    }
+  }
+
   stats()->requests_received++;
   stats()->request_bytes_received += (double)in_payload_.size();
   std::string model = "test1";
   td::int32 max_coefficient = 4000;
-  td::int32 max_tokens = 10000;
+  td::int64 max_tokens = 10000;
   //max_tokens = 0;
   //max_coefficient = 0;
   double timeout = 120.0;
@@ -39,69 +49,10 @@ void ClientRunningRequest::start_up() {
   td::Bits256 encrypted_with = td::Bits256::zero();
 
   auto S = [&]() -> td::Status {
-    auto b = nlohmann::json::parse(in_payload_, nullptr, false, false);
-
-    if (b.is_discarded()) {
-      return td::Status::Error(ton::ErrorCode::protoviolation, "expected json object");
-    }
-    if (!b.is_object()) {
-      return td::Status::Error(ton::ErrorCode::protoviolation, "expected json object");
-    }
-
-    if (!b.contains("model") || !b["model"].is_string()) {
-      return td::Status::Error(ton::ErrorCode::protoviolation, "missing field 'model'");
-    }
-    model = b["model"].get<std::string>();
-    if (b.contains("max_completion_tokens")) {
-      if (!b["max_completion_tokens"].is_number_unsigned()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation,
-                                 "field 'max_completion_tokens' must be positive integer");
-      }
-      max_tokens = b["max_completion_tokens"].get<td::int32>();
-    } else if (b.contains("max_tokens")) {
-      if (!b["max_tokens"].is_number_unsigned()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "field 'max_tokens' must be positive integer");
-      }
-      max_tokens = b["max_tokens"].get<td::int32>();
-    } else {
-      b["max_tokens"] = max_tokens;
-    }
-    if (b.contains("max_coefficient")) {
-      if (!b["max_coefficient"].is_number_unsigned()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation,
-                                 "field 'max_coefficient' must be non-negative integer");
-      }
-      max_coefficient = b["max_coefficient"].get<td::int32>();
-      b.erase("max_coefficient");
-    }
-    if (b.contains("timeout")) {
-      if (!b["timeout"].is_number()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "field 'timeout' must be a number");
-      }
-      timeout = b["timeout"].get<double>();
-      b.erase("timeout");
-    }
-    if (b.contains("enable_debug")) {
-      if (!b["enable_debug"].is_boolean()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "field 'enable_debug' must be a boolean");
-      }
-      enable_debug_ = b["enable_debug"].get<bool>();
-      b.erase("enable_debug");
-    }
-    if (b.contains("request_guid")) {
-      if (!b["request_guid"].is_string()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "field 'request_guid' must be a string");
-      }
-      ext_request_id_ = td::sha256_bits256(b["request_guid"].get<std::string>());
-      b.erase("request_guid");
-    }
-    if (b.contains("receiver_public_key")) {
-      if (!b["receiver_public_key"].is_string()) {
-        return td::Status::Error(ton::ErrorCode::protoviolation, "field 'receiver_public_key' must be a string");
-      }
-      TRY_RESULT_ASSIGN(encrypted_with, parse_bits256_from_json(b["receiver_public_key"].get<std::string>()));
-    }
-    in_payload_ = b.dump();
+    TRY_RESULT(new_payload,
+               validate_client_request(in_request_path_, content_type, in_payload_, &model, &max_tokens,
+                                       &max_coefficient, &timeout, &enable_debug_, &ext_request_id_, &encrypted_with));
+    in_payload_ = std::move(new_payload);
     return td::Status::OK();
   }();
 

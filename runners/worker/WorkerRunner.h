@@ -137,6 +137,7 @@ class WorkerRunner : public BaseRunner {
   void set_force_disabled(bool value);
   void send_state_update_to_proxies();
   void set_coefficient(td::int32 value);
+  void change_model(std::string new_model);
 
   /* UPLINK */
   void set_uplink_is_ok(bool value);

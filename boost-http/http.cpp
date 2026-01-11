@@ -1,4 +1,5 @@
 #include <boost/asio.hpp>
+#include <boost/asio/io_context.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/core/error.hpp>
 #include <boost/beast/http/status.hpp>
@@ -375,7 +376,7 @@ class HttpListener : public std::enable_shared_from_this<HttpListener> {
   std::shared_ptr<HttpCallback> callback_;
 };
 
-static boost::asio::io_context io;
+boost::asio::io_context io;
 static std::vector<std::thread> threads;
 
 void init_http_server(td::uint16 port, std::shared_ptr<HttpCallback> callback) {
@@ -383,9 +384,13 @@ void init_http_server(td::uint16 port, std::shared_ptr<HttpCallback> callback) {
                                                std::move(callback))
       ->run();
 
-  for (int i = 0; i < 2; ++i) {
+  for (int i = 0; i < 10; ++i) {
     threads.emplace_back([&] { io.run(); });
   }
+}
+
+boost::asio::io_context &io_context() {
+  return io;
 }
 
 }  // namespace http

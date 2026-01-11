@@ -426,6 +426,9 @@ class BaseRunner : public td::actor::Actor {
   bool check_image_hashes() const {
     return check_image_hashes_;
   }
+  auto scheduler() const {
+    return scheduler_;
+  }
 
   /* Setters */
   void set_fake_tdx(bool value) {
