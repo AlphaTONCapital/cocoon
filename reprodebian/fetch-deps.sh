@@ -14,7 +14,7 @@ wget -nc https://download.01.org/intel-sgx/sgx-dcap/1.23/linux/distro/Debian12/s
 wget -nc https://github.com/NVIDIA/nvtrust/archive/refs/tags/2025.10.09.001.tar.gz -O "pkg-cache/nvtrust-2025.10.09.001.tar.gz" || true
 wget -nc https://github.com/google/fuse-archive/archive/refs/tags/v1.16.tar.gz -O "pkg-cache/fuse-archive-v1.16.tar.gz" || true
 
-# Fetch pinned OVMF.fd for reproducible TDX measurement (from same snapshot as other deps)
+# Fetch pinned OVMF.fd for reproducible TEE measurement (from same snapshot as other deps)
 if ! [[ -f "OVMF.fd" ]]; then
   echo "Fetching OVMF.fd..."
   OVMF_DEB_URL="https://snapshot.debian.org/archive/debian/20250920T202831Z/pool/main/e/edk2/ovmf_2025.02-9_all.deb"

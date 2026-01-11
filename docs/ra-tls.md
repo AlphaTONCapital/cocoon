@@ -88,17 +88,17 @@ See [`tee/cocoon/gen-cert.cpp`](../tee/cocoon/gen-cert.cpp):
 # No attestation (development)
 ./gen-cert --name dev --tdx none
 
-# Fake attestation (testing without TDX hardware)
+# Fake attestation (testing without TEE hardware)
 ./gen-cert --name test --tdx fake_tdx
 
-# Real TDX attestation (production, must run inside TDX)
+# Real TEE attestation (production, must run inside TEE)
 ./gen-cert --name worker --tdx tdx --force
 ```
 
 Outputs:
 - `<name>_cert.pem` - Certificate with embedded quote
 - `<name>_key.pem` - Ed25519 private key
-- `<name>_image_hash.b64` - TDX image hash (base64)
+- `<name>_image_hash.b64` - TEE image hash (base64)
 
 ## Certificate Verification
 

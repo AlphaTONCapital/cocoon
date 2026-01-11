@@ -1,5 +1,5 @@
 [Unit]
-Description=TDX router
+Description=TEE router
 Wants=vllm.service
 
 [Service]

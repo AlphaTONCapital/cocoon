@@ -1,5 +1,5 @@
 [Unit]
-Description=Refresh TDX certificate
+Description=Refresh TEE certificate
 After=cocoon-ready.target
 Requires=cocoon-ready.target
 

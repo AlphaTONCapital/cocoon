@@ -194,22 +194,22 @@ std::string generate_example_config() {
     {
       "name": "any",
       "type": "any",
-      "description": "Allow any connection without TDX validation"
+      "description": "Allow any connection without TEE validation"
     },
     {
       "name": "fake_tdx",
       "type": "fake_tdx",
-      "description": "Use fake TDX for testing"
+      "description": "Use fake TEE for testing"
     },
     {
       "name": "tdx",
       "type": "tdx",
-      "description": "Use real TDX validation"
+      "description": "Use real TEE validation"
     },
     {
       "name": "strict_tdx",
       "type": "tdx",
-      "description": "TDX policy with advanced validation settings",
+      "description": "TEE policy with advanced validation settings",
       "ratls_policy": {
         "tdx_config": {
           "allowed_image_hashes": [
