@@ -26,6 +26,8 @@ set(COCOON_SOURCE
         cocoon/ProxyConfig.h
         cocoon/RATLS.h
         cocoon/RATLS.cpp
+        cocoon/Tee.h
+        cocoon/Tee.cpp
         cocoon/tdx/tdx.cpp
         cocoon/tdx/tdx.h
         cocoon/tdx/PolicyConfig.cpp
