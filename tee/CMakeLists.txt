@@ -26,6 +26,23 @@ set(COCOON_SOURCE
         cocoon/utils.h
         cocoon/ProxyConfig.cpp
         cocoon/ProxyConfig.h
+        cocoon/sev/ABI.cpp
+        cocoon/sev/ABI.h
+        cocoon/sev/GuestCTX.cpp
+        cocoon/sev/GuestCTX.h
+        cocoon/sev/GuestDevice.cpp
+        cocoon/sev/GuestDevice.h
+        cocoon/sev/OVMF.cpp
+        cocoon/sev/OVMF.h
+        cocoon/sev/PKI.cpp
+        cocoon/sev/PKI.h
+        cocoon/sev/SEVHashes.cpp
+        cocoon/sev/SEVHashes.h
+        cocoon/sev/VMSA.cpp
+        cocoon/sev/VMSA.h
+        cocoon/sev/SHA384.h
+        cocoon/sev/UUID.h
+        cocoon/sev/UUID.cpp
 )
 
 set(COCOON_TEST_SOURCE
@@ -74,7 +91,7 @@ endif()
 
 
 add_library(cocoon STATIC ${COCOON_SOURCE})
-target_link_libraries(cocoon PUBLIC tdutils PRIVATE ${OPENSSL_CRYPTO_LIBRARY} ${CMAKE_DL_LIBS} ${ZLIB_LIBRARIES} tdnet_ported ${ATTESTATION_LIBRARIES})
+target_link_libraries(cocoon PUBLIC tdutils PRIVATE ${OPENSSL_CRYPTO_LIBRARY} ${CMAKE_DL_LIBS} ${ZLIB_LIBRARIES} tdnet_ported ${ATTESTATION_LIBRARIES} cocoon_common)
 target_include_directories(cocoon SYSTEM PRIVATE $<BUILD_INTERFACE:${OPENSSL_INCLUDE_DIR}>)
 target_include_directories(cocoon PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>/..)
 target_include_directories(cocoon PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
@@ -99,6 +116,10 @@ target_link_libraries(router PRIVATE cocoon tdutils tdnet_ported tdactor)
 
 add_executable(tdx-info EXCLUDE_FROM_ALL ${CMAKE_CURRENT_SOURCE_DIR}/cocoon/tdx-info.cpp)
 target_link_libraries(tdx-info PRIVATE cocoon tdutils tdnet_ported tdactor)
+
+add_executable(sev-info EXCLUDE_FROM_ALL ${CMAKE_CURRENT_SOURCE_DIR}/cocoon/sev-info.cpp)
+target_link_libraries(sev-info PRIVATE cocoon tdutils tdnet_ported tdactor)
+target_include_directories(sev-info PUBLIC $<BUILD_INTERFACE:${TL_TD_AUTO_INCLUDE_DIR}>)
 
 add_executable(cocoon-subst EXCLUDE_FROM_ALL ${CMAKE_CURRENT_SOURCE_DIR}/cocoon/cocoon-subst.cpp)
 target_link_libraries(cocoon-subst PRIVATE tdutils)

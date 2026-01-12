@@ -15,13 +15,13 @@ mkdir $SRCDIR/cocoon/build-reprodebian || true
   set -e
   export DESTDIR=
   mkosi-chroot --chdir $SRCDIR/cocoon/build-reprodebian cmake -DTON_ONLY_TONLIB=ON -DTON_USE_ROCKSDB=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTON_ARCH=x86-64-v3 -DCOCOON_ARCH=x86-64-v3 ..
-  mkosi-chroot --chdir $SRCDIR/cocoon/build-reprodebian make -j $(nproc) cocoon-all health-monitor health-client
+  mkosi-chroot --chdir $SRCDIR/cocoon/build-reprodebian make -j $(nproc) cocoon-all health-monitor health-client sev-info
 )
 
 # Install binaries to guest image
 mkdir -p "$DESTDIR/usr/bin"
 
-for binary in tee/sgx-enclave/seal-client tee/sgx-enclave/seal-server tee/gen-cert tee/router worker-runner client-runner proxy-runner key-manager-runner sync-time tee/cocoon-subst tee/health-monitor tee/health-client; do
+for binary in tee/sgx-enclave/seal-client tee/sgx-enclave/seal-server tee/gen-cert tee/router worker-runner client-runner proxy-runner key-manager-runner sync-time tee/cocoon-subst tee/health-monitor tee/health-client tee/sev-info; do
   cp "$SRCDIR/cocoon/build-reprodebian/$binary" "$DESTDIR/usr/bin/"
 done
 
