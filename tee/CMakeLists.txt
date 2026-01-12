@@ -36,13 +36,15 @@ set(COCOON_SOURCE
         cocoon/sev/OVMF.h
         cocoon/sev/PKI.cpp
         cocoon/sev/PKI.h
+        cocoon/sev/PolicyConfig.cpp
+        cocoon/sev/PolicyConfig.h
         cocoon/sev/SEVHashes.cpp
         cocoon/sev/SEVHashes.h
+        cocoon/sev/SHA384.h
+        cocoon/sev/UUID.cpp
+        cocoon/sev/UUID.h
         cocoon/sev/VMSA.cpp
         cocoon/sev/VMSA.h
-        cocoon/sev/SHA384.h
-        cocoon/sev/UUID.h
-        cocoon/sev/UUID.cpp
 )
 
 set(COCOON_TEST_SOURCE
