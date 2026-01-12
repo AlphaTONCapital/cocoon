@@ -38,6 +38,12 @@ void ProxyInboundWorkerConnection::receive_connect_to_proxy_query(td::BufferSlic
           ton::ErrorCode::protoviolation, PSTRING() << "invalid worker image hash " << remote_app_hash().to_hex()));
     }
   }
+  {
+    auto S = runner()->check_verification_key(remote_app_type(), verified_by());
+    if (S.is_error()) {
+      return fail_connection(std::move(S));
+    }
+  }
   TRY_RESULT_PROMISE(promise, obj, fetch_tl_object<cocoon_api::worker_connectToProxy>(std::move(query), true));
   if (!(obj->params_->flags_ & 1)) {
     return promise.set_error(td::Status::Error(ton::ErrorCode::error, "too old worker"));

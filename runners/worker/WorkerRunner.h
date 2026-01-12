@@ -94,10 +94,13 @@ class WorkerRunner : public BaseRunner {
   }
 
   /* ALLOCATORS */
-  std::unique_ptr<ProxyOutboundConnection> allocate_proxy_outbound_connection(
-      TcpClient::ConnectionId connection_id, TcpClient::TargetId target_id, const RemoteAppType &remote_app_type,
-      const td::Bits256 &remote_app_hash) override {
-    return std::make_unique<WorkerProxyConnection>(this, remote_app_type, remote_app_hash, connection_id, target_id);
+  std::unique_ptr<ProxyOutboundConnection> allocate_proxy_outbound_connection(TcpClient::ConnectionId connection_id,
+                                                                              TcpClient::TargetId target_id,
+                                                                              const RemoteAppType &remote_app_type,
+                                                                              const td::Bits256 &remote_app_hash,
+                                                                              const td::Bits256 &verified_by) override {
+    return std::make_unique<WorkerProxyConnection>(this, remote_app_type, remote_app_hash, verified_by, connection_id,
+                                                   target_id);
   }
   std::unique_ptr<ProxyTarget> allocate_proxy_target(TcpClient::TargetId target_id,
                                                      const td::IPAddress &addr) override {

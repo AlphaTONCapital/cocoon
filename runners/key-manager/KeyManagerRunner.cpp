@@ -287,6 +287,12 @@ void KeyManagerRunner::receive_query(TcpClient::ConnectionId connection_id, td::
       if (check_hashes_ && !runner_config()->root_contract_config->has_proxy_hash(conn->remote_app_hash())) {
         return promise.set_error(td::Status::Error(ton::ErrorCode::error, "unknown proxy hash"));
       }
+      {
+        auto S = check_verification_key(remote_app_type_proxy(), conn->verified_by());
+        if (S.is_error()) {
+          return promise.set_error(std::move(S));
+        }
+      }
       std::vector<ton::tl_object_ptr<cocoon_api::keyManager_privateKey>> pks;
       for (auto &k : private_keys_) {
         pks.push_back(ton::create_tl_object<cocoon_api::keyManager_privateKey>(k->valid_until_, k->private_key));
@@ -297,6 +303,12 @@ void KeyManagerRunner::receive_query(TcpClient::ConnectionId connection_id, td::
     case cocoon_api::keyManager_getWorkerPrivateKeys::ID: {
       if (check_hashes_ && !runner_config()->root_contract_config->has_worker_hash(conn->remote_app_hash())) {
         return promise.set_error(td::Status::Error(ton::ErrorCode::error, "unknown worker hash"));
+      }
+      {
+        auto S = check_verification_key(remote_app_type_worker(), conn->verified_by());
+        if (S.is_error()) {
+          return promise.set_error(std::move(S));
+        }
       }
       std::vector<ton::tl_object_ptr<cocoon_api::keyManager_privateKey>> pks;
       for (auto &k : private_keys_) {

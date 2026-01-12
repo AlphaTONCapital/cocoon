@@ -25,6 +25,12 @@ void ClientProxyConnection::send_handshake() {
       return;
     }
   }
+  {
+    auto S = runner()->check_verification_key(remote_app_type(), verified_by());
+    if (S.is_error()) {
+      return fail_connection(std::move(S));
+    }
+  }
   auto params = ton::create_tl_object<cocoon_api::client_params>(3, runner()->cocoon_wallet_address().rserialize(true),
                                                                  runner()->is_test(), runner()->min_proto_version(),
                                                                  runner()->max_proto_version());

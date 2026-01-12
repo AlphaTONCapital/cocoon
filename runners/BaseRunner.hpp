@@ -94,13 +94,18 @@ class BaseConnection {
   const auto &remote_app_hash() const {
     return remote_app_hash_;
   }
+  const auto &verified_by() const {
+    return verified_by_;
+  }
 
   BaseConnection(BaseRunner *runner, bool is_outbound, const RemoteAppType &remote_app_type,
-                 const td::Bits256 &remote_app_hash, TcpClient::ConnectionId connection_id)
+                 const td::Bits256 &remote_app_hash, const td::Bits256 &verified_by,
+                 TcpClient::ConnectionId connection_id)
       : runner_(runner)
       , is_outbound_(is_outbound)
       , remote_app_type_(remote_app_type)
       , remote_app_hash_(remote_app_hash)
+      , verified_by_(verified_by)
       , connection_id_(connection_id)
       , status_(BaseConnectionStatus::Connected) {
     last_status_change_at_ = td::Timestamp::now();
@@ -150,6 +155,7 @@ class BaseConnection {
   bool is_outbound_;
   RemoteAppType remote_app_type_;
   td::Bits256 remote_app_hash_;
+  td::Bits256 verified_by_;
   TcpClient::ConnectionId connection_id_;
   BaseConnectionStatus status_;
   td::int64 queries_sent_{0};
@@ -161,16 +167,16 @@ class BaseConnection {
 class BaseInboundConnection : public BaseConnection {
  public:
   BaseInboundConnection(BaseRunner *runner, const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash,
-                        TcpClient::ConnectionId connection_id)
-      : BaseConnection(runner, false, remote_app_type, remote_app_hash, connection_id) {
+                        const td::Bits256 &verified_by, TcpClient::ConnectionId connection_id)
+      : BaseConnection(runner, false, remote_app_type, remote_app_hash, verified_by, connection_id) {
   }
 };
 
 class BaseOutboundConnection : public BaseConnection {
  public:
   BaseOutboundConnection(BaseRunner *runner, const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash,
-                         TcpClient::ConnectionId connection_id)
-      : BaseConnection(runner, true, remote_app_type, remote_app_hash, connection_id) {
+                         const td::Bits256 &verified_by, TcpClient::ConnectionId connection_id)
+      : BaseConnection(runner, true, remote_app_type, remote_app_hash, verified_by, connection_id) {
   }
 
   void start_up() override {
@@ -184,8 +190,10 @@ class BaseOutboundConnection : public BaseConnection {
 class ProxyOutboundConnection : public BaseOutboundConnection {
  public:
   ProxyOutboundConnection(BaseRunner *runner, const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash,
-                          TcpClient::ConnectionId connection_id, TcpClient::TargetId target_id)
-      : BaseOutboundConnection(runner, remote_app_type, remote_app_hash, connection_id), target_id_(target_id) {
+                          const td::Bits256 &verified_by, TcpClient::ConnectionId connection_id,
+                          TcpClient::TargetId target_id)
+      : BaseOutboundConnection(runner, remote_app_type, remote_app_hash, verified_by, connection_id)
+      , target_id_(target_id) {
   }
 
   void send_handshake() override {
@@ -267,9 +275,10 @@ class ProxyTarget {
 class KeyManagerOutboundConnection : public BaseOutboundConnection {
  public:
   KeyManagerOutboundConnection(BaseRunner *runner, const RemoteAppType &remote_app_type,
-                               const td::Bits256 &remote_app_hash, TcpClient::ConnectionId connection_id,
-                               RunnerRole role)
-      : BaseOutboundConnection(runner, remote_app_type, remote_app_hash, connection_id), role_(std::move(role)) {
+                               const td::Bits256 &remote_app_hash, const td::Bits256 &verified_by,
+                               TcpClient::ConnectionId connection_id, RunnerRole role)
+      : BaseOutboundConnection(runner, remote_app_type, remote_app_hash, verified_by, connection_id)
+      , role_(std::move(role)) {
   }
 
  private:
@@ -426,9 +435,13 @@ class BaseRunner : public td::actor::Actor {
   bool check_image_hashes() const {
     return check_image_hashes_;
   }
+  bool check_image_is_verified() const {
+    return false;
+  }
   auto scheduler() const {
     return scheduler_;
   }
+  td::Status check_verification_key(const RemoteAppType &app_type, const td::Bits256 &verified_by);
 
   /* Setters */
   void set_fake_tdx(bool value) {
@@ -569,24 +582,26 @@ class BaseRunner : public td::actor::Actor {
   /* connections */
   virtual std::unique_ptr<ProxyOutboundConnection> allocate_proxy_outbound_connection(
       TcpClient::ConnectionId connection_id, TcpClient::TargetId target_id, const RemoteAppType &remote_app_type,
-      const td::Bits256 &remote_app_hash) {
+      const td::Bits256 &remote_app_hash, const td::Bits256 &verified_by) {
     return nullptr;
   }
   virtual std::unique_ptr<BaseOutboundConnection> allocate_nonproxy_outbound_connection(
       TcpClient::ConnectionId connection_id, TcpClient::TargetId target_id, const RemoteAppType &remote_app_type,
-      const td::Bits256 &remote_app_hash) {
+      const td::Bits256 &remote_app_hash, const td::Bits256 &verified_by) {
     return nullptr;
   }
   virtual std::unique_ptr<BaseInboundConnection> allocate_inbound_connection(
       TcpClient::ConnectionId connection_id, TcpClient::ListeningSocketId listening_socket_id,
-      const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash) {
+      const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash, const td::Bits256 &verified_by) {
     return nullptr;
   }
   //void connect_to_proxy(td::IPAddress address, td::Bits256 hash);
   void inbound_connection_ready(TcpClient::ConnectionId connection_id, TcpClient::ListeningSocketId listening_socket_id,
-                                const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash);
+                                const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash,
+                                const td::Bits256 &verified_by);
   void outbound_connection_ready(TcpClient::ConnectionId connection_id, TcpClient::TargetId target_id,
-                                 const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash);
+                                 const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash,
+                                 const td::Bits256 &verified_by);
   void conn_stop_ready(TcpClient::ConnectionId connection_id);
   std::unique_ptr<TcpClient::Callback> make_tcp_client_callback();
   BaseConnection *get_connection(TcpClient::ConnectionId connection_id) {

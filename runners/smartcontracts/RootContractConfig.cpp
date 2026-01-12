@@ -391,6 +391,7 @@ td::Result<std::unique_ptr<RootContractConfig>> RootContractConfig::load_from_st
             })) {
           return td::Status::Error("failed to iterate proxy verified keys dict");
         }
+        std::sort(verified_proxy_keys.begin(), verified_proxy_keys.end());
       }
       if (!cs.fetch_bool_to(exist_bit)) {
         return td::Status::Error("failed to get dict exist bit");
@@ -405,6 +406,7 @@ td::Result<std::unique_ptr<RootContractConfig>> RootContractConfig::load_from_st
             })) {
           return td::Status::Error("failed to iterate worker verified keys dict");
         }
+        std::sort(verified_worker_keys.begin(), verified_worker_keys.end());
       }
       if (!cs.fetch_bool_to(exist_bit)) {
         return td::Status::Error("failed to get dict exist bit");
@@ -419,6 +421,7 @@ td::Result<std::unique_ptr<RootContractConfig>> RootContractConfig::load_from_st
             })) {
           return td::Status::Error("failed to iterate key manager verified keys dict");
         }
+        std::sort(verified_key_manager_keys.begin(), verified_key_manager_keys.end());
       }
       if (!cs.empty_ext()) {
         return td::Status::Error("extra data in verified keys cell");

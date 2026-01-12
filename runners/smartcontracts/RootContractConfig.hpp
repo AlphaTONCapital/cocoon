@@ -178,6 +178,16 @@ class RootContractConfig {
     return key_manager_image_hash_;
   }
 
+  bool has_proxy_verified_key(const td::Bits256 &key) const {
+    return std::binary_search(verified_proxy_keys_.begin(), verified_proxy_keys_.end(), key);
+  }
+  bool has_worker_verified_key(const td::Bits256 &key) const {
+    return std::binary_search(verified_worker_keys_.begin(), verified_worker_keys_.end(), key);
+  }
+  bool has_key_manager_verified_key(const td::Bits256 &key) const {
+    return std::binary_search(verified_key_manager_keys_.begin(), verified_key_manager_keys_.end(), key);
+  }
+
  private:
   block::StdAddress owner_;
 

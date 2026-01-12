@@ -302,15 +302,17 @@ void ProxyRunner::on_client_register(const block::StdAddress &client_owner_addre
 
 std::unique_ptr<BaseInboundConnection> ProxyRunner::allocate_inbound_connection(
     TcpClient::ConnectionId connection_id, TcpClient::ListeningSocketId listening_socket_id,
-    const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash) {
+    const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash, const td::Bits256 &verified_by) {
   if (!is_initialized() || is_disabled()) {
     return nullptr;
   }
 
   if (remote_app_type == remote_app_type_worker()) {
-    return std::make_unique<ProxyInboundWorkerConnection>(this, remote_app_type, remote_app_hash, connection_id);
+    return std::make_unique<ProxyInboundWorkerConnection>(this, remote_app_type, remote_app_hash, verified_by,
+                                                          connection_id);
   } else {
-    return std::make_unique<ProxyInboundClientConnection>(this, remote_app_type, remote_app_hash, connection_id);
+    return std::make_unique<ProxyInboundClientConnection>(this, remote_app_type, remote_app_hash, verified_by,
+                                                          connection_id);
   }
 }
 

@@ -218,6 +218,41 @@ bool ProxyTarget::should_choose_another_proxy() {
  *
  */
 
+td::Status BaseRunner::check_verification_key(const RemoteAppType &app_type, const td::Bits256 &verified_by) {
+  if (!check_image_is_verified()) {
+    return td::Status::OK();
+  }
+
+  if (!runner_config_ || !runner_config_->root_contract_config) {
+    return td::Status::Error(ton::ErrorCode::notready, "didn't download root contract state");
+  }
+
+  auto &conf = *runner_config_->root_contract_config;
+  if (app_type == remote_app_type_proxy()) {
+    if (!conf.has_proxy_verified_key(verified_by)) {
+      return td::Status::Error(ton::ErrorCode::protoviolation,
+                               PSTRING() << "proxy verified by unknown key " << verified_by.to_hex());
+    }
+    return td::Status::OK();
+  }
+  if (app_type == remote_app_type_worker()) {
+    if (!conf.has_worker_verified_key(verified_by)) {
+      return td::Status::Error(ton::ErrorCode::protoviolation,
+                               PSTRING() << "worker verified by unknown key " << verified_by.to_hex());
+    }
+    return td::Status::OK();
+  }
+  if (app_type == remote_app_type_key_manager()) {
+    if (!conf.has_key_manager_verified_key(verified_by)) {
+      return td::Status::Error(ton::ErrorCode::protoviolation,
+                               PSTRING() << "key manager verified by unknown key " << verified_by.to_hex());
+    }
+    return td::Status::OK();
+  }
+
+  return td::Status::OK();
+}
+
 /*
  *
  * SETTERS
@@ -519,8 +554,10 @@ void BaseRunner::cond_reconnect_to_proxy() {
 
 void BaseRunner::inbound_connection_ready(TcpClient::ConnectionId connection_id,
                                           TcpClient::ListeningSocketId listening_socket_id,
-                                          const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash) {
-  auto conn = allocate_inbound_connection(connection_id, listening_socket_id, remote_app_type, remote_app_hash);
+                                          const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash,
+                                          const td::Bits256 &verified_by) {
+  auto conn =
+      allocate_inbound_connection(connection_id, listening_socket_id, remote_app_type, remote_app_hash, verified_by);
   if (!conn) {
     close_connection(connection_id);
     return;
@@ -531,7 +568,8 @@ void BaseRunner::inbound_connection_ready(TcpClient::ConnectionId connection_id,
 }
 
 void BaseRunner::outbound_connection_ready(TcpClient::ConnectionId connection_id, TcpClient::TargetId target_id,
-                                           const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash) {
+                                           const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash,
+                                           const td::Bits256 &verified_by) {
   LOG(INFO) << "outbound connection ready: connection_id=" << connection_id << " target_id=" << target_id;
 
   if (remote_app_type == remote_app_type_key_manager()) {
@@ -545,6 +583,12 @@ void BaseRunner::outbound_connection_ready(TcpClient::ConnectionId connection_id
         return;
       }
     }
+    {
+      auto S = check_verification_key(remote_app_type, verified_by);
+      if (S.is_error()) {
+        return fail_connection(connection_id, std::move(S));
+      }
+    }
 
     if (target_id != key_manager_socket_id_) {
       fail_connection(connection_id, td::Status::Error("wrong key manager target id"));
@@ -556,8 +600,8 @@ void BaseRunner::outbound_connection_ready(TcpClient::ConnectionId connection_id
     }
 
     key_manager_connection_id_ = connection_id;
-    auto conn =
-        std::make_unique<KeyManagerOutboundConnection>(this, remote_app_type, remote_app_hash, connection_id, role_);
+    auto conn = std::make_unique<KeyManagerOutboundConnection>(this, remote_app_type, remote_app_hash, verified_by,
+                                                               connection_id, role_);
 
     auto it2 = all_connections_.emplace(connection_id, std::move(conn)).first;
     LOG(DEBUG) << "sending connected to created outbound connection";
@@ -571,7 +615,8 @@ void BaseRunner::outbound_connection_ready(TcpClient::ConnectionId connection_id
     close_connection(connection_id);
     return;
   }
-  auto proxy_conn = allocate_proxy_outbound_connection(connection_id, target_id, remote_app_type, remote_app_hash);
+  auto proxy_conn =
+      allocate_proxy_outbound_connection(connection_id, target_id, remote_app_type, remote_app_hash, verified_by);
   if (!proxy_conn) {
     LOG(INFO) << "failing created outbound connection: rejected by application";
     close_connection(connection_id);
@@ -598,14 +643,16 @@ std::unique_ptr<TcpClient::Callback> BaseRunner::make_tcp_client_callback() {
     Cb(td::actor::ActorId<BaseRunner> runner) : runner_(runner) {
     }
     void on_ready_outbound(TcpClient::ConnectionId connection_id, TcpClient::TargetId target_id,
-                           const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash) override {
+                           const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash,
+                           const td::Bits256 &verified_by) override {
       td::actor::send_closure(runner_, &BaseRunner::outbound_connection_ready, connection_id, target_id,
-                              remote_app_type, remote_app_hash);
+                              remote_app_type, remote_app_hash, verified_by);
     }
     void on_ready_inbound(TcpClient::ConnectionId connection_id, TcpClient::ListeningSocketId listening_socket_id,
-                          const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash) override {
+                          const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash,
+                          const td::Bits256 &verified_by) override {
       td::actor::send_closure(runner_, &BaseRunner::inbound_connection_ready, connection_id, listening_socket_id,
-                              remote_app_type, remote_app_hash);
+                              remote_app_type, remote_app_hash, verified_by);
     }
     void on_stop_ready(TcpClient::ConnectionId connection_id) override {
       td::actor::send_closure(runner_, &BaseRunner::conn_stop_ready, connection_id);

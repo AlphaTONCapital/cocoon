@@ -216,7 +216,8 @@ class TcpClientImpl : public TcpClient {
       try_stop();
     }
   }
-  void conn_ready(ConnectionId conn_id, const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash) {
+  void conn_ready(ConnectionId conn_id, const RemoteAppType &remote_app_type, const td::Bits256 &remote_app_hash,
+                  const td::Bits256 &verified_by) {
     LOG(INFO) << "tcp: created connection " << conn_id;
     auto it = active_connections_.find(conn_id);
     if (it != active_connections_.end()) {
@@ -244,10 +245,11 @@ class TcpClientImpl : public TcpClient {
         }
       }
       if (it->second.is_outbound) {
-        callback_->on_ready_outbound(conn_id, it->second.target_id, it->second.remote_app_type, remote_app_hash);
+        callback_->on_ready_outbound(conn_id, it->second.target_id, it->second.remote_app_type, remote_app_hash,
+                                     verified_by);
       } else {
         callback_->on_ready_inbound(conn_id, it->second.listening_socket_id, it->second.remote_app_type,
-                                    remote_app_hash);
+                                    remote_app_hash, verified_by);
       }
     }
   }

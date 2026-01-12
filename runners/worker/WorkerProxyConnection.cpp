@@ -30,6 +30,12 @@ void WorkerProxyConnection::send_handshake() {
       return;
     }
   }
+  {
+    auto S = runner()->check_verification_key(remote_app_type(), verified_by());
+    if (S.is_error()) {
+      return fail_connection(std::move(S));
+    }
+  }
   auto params = ton::create_tl_object<cocoon_api::worker_params>(
       3, runner()->owner_address().rserialize(true), runner()->model_name(), runner()->coefficient(),
       runner()->is_test(), runner()->proxy_targets_number(), runner()->max_active_requests(),

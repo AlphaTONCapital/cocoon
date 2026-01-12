@@ -122,7 +122,8 @@ class ProxyRunner : public BaseRunner {
   std::unique_ptr<BaseInboundConnection> allocate_inbound_connection(TcpClient::ConnectionId connection_id,
                                                                      TcpClient::ListeningSocketId listening_socket_id,
                                                                      const RemoteAppType &remote_app_type,
-                                                                     const td::Bits256 &remote_app_hash) override;
+                                                                     const td::Bits256 &remote_app_hash,
+                                                                     const td::Bits256 &verified_by) override;
 
   /* INITIALIZATION */
   void load_config(td::Promise<td::Unit> promise) override;
