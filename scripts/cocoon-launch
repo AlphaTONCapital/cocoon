@@ -749,7 +749,7 @@ def run_local_all(cfg):
             **base_vars
         )
         cfg.extra_vars.update({
-            'TDX_IMAGE_HASH': hash_val,
+            'TEE_IMAGE_HASH': hash_val,
             'TON_CONFIG_FILE': '/tmp/run/global.config.json',
             'APP_KEY': app_key,
             'DISK_PATH': '/tmp',
