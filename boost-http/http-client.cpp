@@ -122,6 +122,8 @@ class HttpClientSession : public std::enable_shared_from_this<HttpClientSession>
       }
       headers.emplace_back(h.name_string(), h.value());
     }
+
+    sent_answer_ = true;
     callback_->receive_answer(status_code, std::move(content_type), std::move(headers), "", false);
 
     read_payload();
@@ -154,6 +156,7 @@ class HttpClientSession : public std::enable_shared_from_this<HttpClientSession>
     }
 
     if (parser_.is_done()) {
+      payload_completed_ = true;
       callback_->receive_payload_part("", true);
       return do_close();
     }
@@ -171,6 +174,14 @@ class HttpClientSession : public std::enable_shared_from_this<HttpClientSession>
 
   void fail(const char *what, beast::error_code ec) {
     LOG(ERROR) << "failed http client: " << what << ": " << ec.message();
+    if (!sent_answer_) {
+      sent_answer_ = true;
+      payload_completed_ = true;
+      callback_->receive_answer(502, "text/plain", {}, "", true);
+    } else if (!payload_completed_) {
+      payload_completed_ = true;
+      callback_->receive_payload_part("", true);
+    }
     do_close();
   }
 
@@ -192,6 +203,9 @@ class HttpClientSession : public std::enable_shared_from_this<HttpClientSession>
 
   char body_buf_[16 << 10];
   std::shared_ptr<HttpClientSession> self_;
+
+  bool sent_answer_{false};
+  bool payload_completed_{false};
 };
 
 void run_http_request(const td::IPAddress &addr, HttpCallback::RequestType request_type, std::string url,

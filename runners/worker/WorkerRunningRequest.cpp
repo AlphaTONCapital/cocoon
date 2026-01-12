@@ -4,7 +4,6 @@
 #include "boost-http/http.h"
 #include "common/bitstring.h"
 #include "errorcode.h"
-#include "http/http.h"
 #include "nlohmann/json_fwd.hpp"
 #include "runners/helpers/HttpSender.hpp"
 #include "runners/helpers/ValidateRequest.h"
@@ -151,13 +150,14 @@ void WorkerRunningRequest::start_request() {
                         std::vector<std::pair<std::string, std::string>> headers, std::string body_part = "",
                         bool is_completed = false) override {
       scheduler_->run_in_context([&]() {
-        td::actor::send_closure(self_, &WorkerRunningRequest::process_request_response, status_code, std::move(headers),
-                                body_part, is_completed);
+        td::actor::send_closure_later(self_, &WorkerRunningRequest::process_request_response, status_code,
+                                      std::move(headers), body_part, is_completed);
       });
     }
     void receive_payload_part(std::string body_part, bool is_completed) override {
-      scheduler_->run_in_context(
-          [&]() { td::actor::send_closure(self_, &WorkerRunningRequest::send_payload_part, body_part, is_completed); });
+      scheduler_->run_in_context([&]() {
+        td::actor::send_closure_later(self_, &WorkerRunningRequest::send_payload_part, body_part, is_completed);
+      });
     }
 
    private:

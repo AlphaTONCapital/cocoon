@@ -225,7 +225,8 @@ void WorkerRunner::custom_initialize(td::Promise<td::Unit> promise) {
         promise.set_value(td::Unit());
       });
 
-  td::actor::create_actor<WorkerUplinkMonitor>("uplinkmonitor", actor_id(this)).release();
+  td::actor::create_actor<WorkerUplinkMonitor>("uplinkmonitor", forward_requests_to_, actor_id(this), scheduler())
+      .release();
 }
 
 /*

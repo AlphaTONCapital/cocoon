@@ -41,8 +41,7 @@ func stream(w http.ResponseWriter, r *http.Request) {
 
 func nostream(w http.ResponseWriter, r *http.Request) {
   defer r.Body.Close()
-  body, _ := io.ReadAll(r.Body)
-  bodyString := string(body)
+  io.ReadAll(r.Body)
 
 	w.Header().Set("Content-Type", "application/json")
 	flusher, _ := w.(http.Flusher)

@@ -6,7 +6,6 @@
 #include "cocoon/tdx.h"
 #include "common/bitstring.h"
 #include "boost-http/http.h"
-#include "http/http.h"
 #include "net/TcpClient.h"
 #include "td/actor/ActorId.h"
 #include "td/actor/ActorOwn.h"
@@ -295,8 +294,9 @@ void BaseRunner::initialize_http_server(td::Promise<td::Unit> promise) {
                            std::unique_ptr<http::HttpRequestCallback> answer_callback) override {
         CHECK(answer_callback);
         scheduler_->run_in_context([&]() {
-          td::actor::send_closure(client_, &BaseRunner::receive_http_request_outer, request_type, std::move(headers),
-                                  std::move(path), std::move(args), std::move(body), std::move(answer_callback));
+          td::actor::send_closure_later(client_, &BaseRunner::receive_http_request_outer, request_type,
+                                        std::move(headers), std::move(path), std::move(args), std::move(body),
+                                        std::move(answer_callback));
         });
       }
 
