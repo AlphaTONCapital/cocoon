@@ -10,19 +10,21 @@
 namespace cocoon {
 
 struct MultipartFormDataValue {
-  std::string descr;
+  std::vector<std::string> descr;
   std::string value;
 
   MultipartFormDataValue() = default;
-  static MultipartFormDataValue create(std::string descr, std::string value) {
+  static MultipartFormDataValue create(std::vector<std::string> descr, std::string value) {
     return MultipartFormDataValue(std::move(descr), std::move(value));
   }
   static MultipartFormDataValue create_with_name(std::string name, std::string value) {
-    return MultipartFormDataValue(PSTRING() << "form-data; name=\"" << name << "\"", std::move(value));
+    return MultipartFormDataValue({PSTRING() << "Content-Disposition: form-data; name=\"" << name << "\""},
+                                  std::move(value));
   }
 
  private:
-  MultipartFormDataValue(std::string descr, std::string value) : descr(std::move(descr)), value(std::move(value)) {
+  MultipartFormDataValue(std::vector<std::string> descr, std::string value)
+      : descr(std::move(descr)), value(std::move(value)) {
   }
 };
 

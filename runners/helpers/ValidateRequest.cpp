@@ -24,6 +24,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 namespace cocoon {
 
@@ -53,20 +54,26 @@ class MultipartParser {
  private:
   static int read_header_name(multipart_parser *p, const char *at, size_t length) {
     MultipartParser *self = (MultipartParser *)multipart_parser_get_data(p);
+    if (self->was_data_) {
+      self->was_data_ = false;
+      self->name_ = "";
+      self->descr_.clear();
+    }
 
+    self->header_name_ = std::string(at, length);
     self->process_header_ = ci_str_equals(td::Slice(at, length), "Content-Disposition");
     return 0;
   }
   static int read_header_value(multipart_parser *p, const char *at, size_t length) {
     MultipartParser *self = (MultipartParser *)multipart_parser_get_data(p);
-    if (!self->process_header_) {
-      return 0;
-    }
-
     auto v = td::Slice(at, length);
     v = trim(v);
 
-    self->descr_ = v.str();
+    self->descr_.push_back(PSTRING() << self->header_name_ << ": " << v.str());
+
+    if (!self->process_header_) {
+      return 0;
+    }
 
     auto v_vec = td::full_split(v, ';');
     for (auto el : v_vec) {
@@ -89,10 +96,15 @@ class MultipartParser {
   static int on_part_data(multipart_parser *p, const char *at, size_t length) {
     MultipartParser *self = (MultipartParser *)multipart_parser_get_data(p);
     if (self->name_ == "") {
+      self->was_data_ = true;
       return 0;
     }
-    self->fields_[self->name_] = MultipartFormDataValue::create(self->descr_, std::string(at, length));
-    self->name_ = "";
+    if (!self->was_data_) {
+      self->was_data_ = true;
+      self->fields_[self->name_] = MultipartFormDataValue::create(std::move(self->descr_), std::string(at, length));
+    } else {
+      self->fields_[self->name_].value += std::string_view(at, length);
+    }
     return 0;
   }
 
@@ -124,8 +136,10 @@ class MultipartParser {
   multipart_parser *parser_{nullptr};
   multipart_parser_settings callbacks_{};
   bool process_header_{false};
+  bool was_data_{false};
   std::string name_;
-  std::string descr_;
+  std::string header_name_;
+  std::vector<std::string> descr_;
   MultipartFormDataMap fields_;
 };
 
@@ -173,7 +187,10 @@ static td::Result<std::string> store_multipart_form(td::Slice content_type, Mult
 
   for (const auto &[key, value] : fields) {
     body << "--" << boundary << "\r\n";
-    body << "Content-Disposition: " << value.descr << "\r\n\r\n";
+    for (auto &e : value.descr) {
+      body << e << "\r\n";
+    }
+    body << "\r\n";
     body << value.value << "\r\n";
   }
 
