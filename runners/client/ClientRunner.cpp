@@ -27,13 +27,13 @@ void ClientRunner::run_http_request(http::HttpCallback::RequestType request_type
                                     std::unique_ptr<http::HttpRequestCallback> answer_callback) {
   auto proxy_target = get_ready_proxy_target();
   if (!proxy_target || !proxy_target->is_ready()) {
-    return http_send_static_answer(503 /* service unavaylable */, "no working proxy connections",
+    return http_send_static_answer(503 /* service unavailable */, "no working proxy connections",
                                    std::move(answer_callback));
   }
 
   auto connection = get_connection(proxy_target->connection_id());
   if (!connection || !connection->is_ready()) {
-    return http_send_static_answer(503 /* service unavaylable */, "no working proxy connections",
+    return http_send_static_answer(503 /* service unavailable */, "no working proxy connections",
                                    std::move(answer_callback));
   }
 
@@ -56,13 +56,13 @@ void ClientRunner::run_http_request(http::HttpCallback::RequestType request_type
 void ClientRunner::run_get_models_request(std::unique_ptr<http::HttpRequestCallback> answer_callback) {
   auto proxy_target = get_ready_proxy_target();
   if (!proxy_target || !proxy_target->is_ready()) {
-    return http_send_static_answer(503 /* service unavaylable */, "no working proxy connections",
+    return http_send_static_answer(503 /* service unavailable */, "no working proxy connections",
                                    std::move(answer_callback));
   }
 
   auto connection = static_cast<ClientProxyConnection *>(get_connection(proxy_target->connection_id()));
   if (!connection || !connection->is_ready()) {
-    return http_send_static_answer(503 /* service unavaylable */, "no working proxy connections",
+    return http_send_static_answer(503 /* service unavailable */, "no working proxy connections",
                                    std::move(answer_callback));
   }
 

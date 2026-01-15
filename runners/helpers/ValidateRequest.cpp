@@ -902,10 +902,10 @@ static td::Status process_content_part(Ctx &ctx) {
     return td::Status::OK();
   }));
 
-  bool is_text = type.find("text");
-  bool is_image = type.find("image");
-  bool is_audio = type.find("audio");
-  bool is_file = type.find("file");
+  bool is_text = type.find("text") != type.npos;
+  bool is_image = type.find("image") != type.npos;
+  bool is_audio = type.find("audio") != type.npos;
+  bool is_file = type.find("file") != type.npos;
   bool is_refusal = ctx.has_field("refusal");
   if (is_refusal) {
     return process_content_part_refusal(ctx);
