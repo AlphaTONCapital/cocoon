@@ -10,6 +10,7 @@
 #include "td/actor/actor.h"
 #include "td/utils/Random.h"
 #include "td/utils/SharedSlice.h"
+#include "td/utils/Time.h"
 #include "td/utils/buffer.h"
 #include "td/utils/common.h"
 #include "td/utils/filesystem.h"
@@ -20,9 +21,11 @@
 #include "ProxyInboundWorkerConnection.h"
 #include "runners/smartcontracts/Opcodes.hpp"
 #include "git.h"
+#include "boost-http/www-form-urlencoded.h"
 
 #include "cocoon-tl-utils/cocoon-tl-utils.hpp"
 #include "td/utils/format.h"
+#include "td/utils/misc.h"
 #include "td/utils/overloaded.h"
 #include "tl/TlObject.h"
 #include "ton/ton-types.h"
@@ -554,6 +557,20 @@ void ProxyRunner::custom_initialize(td::Promise<td::Unit> promise) {
           std::unique_ptr<http::HttpRequestCallback> answer_callback) {
         if (request_type == http::HttpCallback::RequestType::Post) {
           http_send_static_answer(http_enable_disable(0), std::move(answer_callback));
+        } else {
+          http_send_static_answer(404, "not found", std::move(answer_callback));
+        }
+      });
+  register_custom_http_handler(
+      "/request/change_worker_model",
+      [&](http::HttpCallback::RequestType request_type, std::vector<std::pair<std::string, std::string>> headers,
+          std::string path, std::vector<std::pair<std::string, std::string>> args, std::string body,
+          std::unique_ptr<http::HttpRequestCallback> answer_callback) {
+        if (request_type == http::HttpCallback::RequestType::Post) {
+          auto post_args = http::parse_x_www_form_urlencoded(body);
+          http_send_static_answer(http_change_worker_model(get_from_sorted_list(post_args, "connection_id"),
+                                                           get_from_sorted_list(post_args, "new_model_name")),
+                                  std::move(answer_callback));
         } else {
           http_send_static_answer(404, "not found", std::move(answer_callback));
         }
@@ -1603,6 +1620,28 @@ std::string ProxyRunner::http_withdraw() {
   return wrap_short_answer_to_http("request sent");
 }
 
+std::string ProxyRunner::http_change_worker_model(std::string worker_connection_id, std::string new_model_name) {
+  auto R = td::to_integer_safe<td::int64>(worker_connection_id);
+  if (R.is_error()) {
+    return wrap_short_answer_to_http("worker_connection_id not an integer");
+  }
+  auto conn_id = R.move_as_ok();
+  auto conn = get_connection(conn_id);
+  if (!conn) {
+    return wrap_short_answer_to_http("connection not found");
+  }
+  if (conn->remote_app_type() != remote_app_type_worker()) {
+    return wrap_short_answer_to_http("connection not from worker");
+  }
+  auto w_conn = static_cast<ProxyInboundWorkerConnection *>(conn);
+  if (!w_conn->handshake_is_completed()) {
+    return wrap_short_answer_to_http("connection is not ready");
+  }
+  auto req = create_serialize_tl_object<cocoon_api::worker_changeModel>(new_model_name);
+  send_query_to_connection(conn_id, "changeworkermodel", std::move(req), td::Timestamp::in(60.0), {});
+  return wrap_short_answer_to_http("request sent");
+}
+
 std::string ProxyRunner::http_generate_main() {
   td::StringBuilder sb;
   sb << "<!DOCTYPE html>\n";
@@ -1746,6 +1785,12 @@ std::string ProxyRunner::http_generate_main() {
         auto &w = *it2.second;
         sb << "<h2>WORKER CONNECTION " << address_link(w.info->worker_owner_address()) << "</h2>\n";
         w.store_stats(sb);
+        sb << "change model: <form method=\"post\" action=\"/request/change_worker_model\">\n"
+           << "<input type=\"text\" id=\"new_model_name\" name=\"new_model_name\">\n"
+           << "<input type=\"hidden\" id=\"connection_id\" name=\"connection_id\" value=\"" << it2.first << "\">\n"
+           << "<button type=\"submit\" id=\"change_worker_model\" name=\"change_worker_model\" value=\"1\">change "
+              "model</button>\n"
+           << "</form></br>\n";
       }
     }
   }

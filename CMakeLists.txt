@@ -315,6 +315,7 @@ set(COMMON_SOURCE
 
  boost-http/http.cpp
  boost-http/http-client.cpp
+ boost-http/www-form-urlencoded.cpp
 
  third-party/multipart-parser-c/multipart_parser.c
 )

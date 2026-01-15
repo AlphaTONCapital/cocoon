@@ -225,6 +225,7 @@ void ProxyRunningRequest::fail(td::Status error) {
 }
 
 void ProxyRunningRequest::finish(bool is_success) {
+  CHECK(tokens_used_);
   LOG(INFO) << "proxy request " << id_.to_hex() << ": completed: success=" << (is_success ? "YES" : "NO")
             << " time=" << run_time() << " payload_parts=" << payload_parts_ << " payload_bytes=" << payload_bytes_
             << " tokens_used=" << tokens_used_->prompt_tokens_used_ << "+" << tokens_used_->cached_tokens_used_ << "+"

@@ -68,7 +68,8 @@ workerRunner.config
   check_proxy_hashes:Bool
   max_active_requests:int
   image_hash:int256
-  http_access_hash:string = workerRunner.Config;
+  http_access_hash:string 
+  change_model_script:string = workerRunner.Config;
 
 clientRunner.config
   is_test:Bool
@@ -295,6 +296,8 @@ worker.proxyHandshakeCompleted = worker.HandshakeCompleted;
 
 worker.paymentStatus signed_payment:proxy.SignedPayment db_tokens:long max_tokens:long = worker.PaymentStatus;
 
+worker.changedModel = worker.ChangedModel;
+
 ---functions---
 
 worker.connectToProxy params:worker.params = worker.ConnectedToProxy;
@@ -303,7 +306,7 @@ worker.extendedCompareBalanceWithProxy tokens_committed_to_db:long other:bytes =
 worker.proxyHandshakeComplete is_disabled:Bool = worker.HandshakeCompleted;
 
 worker.updatePaymentStatus = worker.PaymentStatus;
-
+worker.changeModel new_model:string = worker.ChangedModel;
 
 ---types---
 

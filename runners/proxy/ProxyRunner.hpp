@@ -208,6 +208,7 @@ class ProxyRunner : public BaseRunner {
   std::string http_charge(std::string client_sc_address);
   std::string http_enable_disable(td::int64 disable_up_to_version);
   std::string http_withdraw();
+  std::string http_change_worker_model(std::string connection_id, std::string new_model_name);
 
  private:
   block::StdAddress owner_address_;

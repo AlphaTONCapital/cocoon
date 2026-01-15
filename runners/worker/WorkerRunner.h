@@ -140,7 +140,7 @@ class WorkerRunner : public BaseRunner {
   void set_force_disabled(bool value);
   void send_state_update_to_proxies();
   void set_coefficient(td::int32 value);
-  void change_model(std::string new_model);
+  td::Status change_model(std::string new_model);
 
   /* UPLINK */
   void set_uplink_is_ok(bool value);
@@ -215,6 +215,8 @@ class WorkerRunner : public BaseRunner {
   std::shared_ptr<WorkerStats> stats_ = std::make_shared<WorkerStats>();
 
   td::Bits256 local_image_hash_unverified_;
+
+  std::string change_model_script_;
 };
 
 }  // namespace cocoon

@@ -3,6 +3,7 @@
 
 #include "auto/tl/cocoon_api.h"
 #include "checksum.h"
+#include "cocoon-tl-utils/cocoon-common-utils.hpp"
 #include "cocoon-tl-utils/cocoon-tl-utils.hpp"
 #include "common/bitstring.h"
 #include "errorcode.h"
@@ -22,6 +23,14 @@
 #include "tl/tl/tl_json.h"
 #include "auto/tl/cocoon_api_json.h"
 #include <memory>
+
+#if __has_include(<unistd.h>)
+#include <unistd.h>
+#include <sys/wait.h>
+#define HAS_UNISTD 1
+#elif
+#define HAS_UNISTD 0
+#endif
 
 namespace cocoon {
 
@@ -126,6 +135,8 @@ void WorkerRunner::load_config(td::Promise<td::Unit> promise) {
     if (conf.max_active_requests_ > 0) {
       set_max_active_requests(conf.max_active_requests_);
     }
+
+    change_model_script_ = conf.change_model_script_;
 
     return td::Status::OK();
   }();
@@ -362,6 +373,12 @@ void WorkerRunner::receive_query(TcpClient::ConnectionId connection_id, td::Buff
 
   auto magic = get_tl_magic(query);
   switch (magic) {
+    case cocoon_api::worker_changeModel::ID: {
+      TRY_RESULT_PROMISE(promise, obj, cocoon::fetch_tl_object<cocoon_api::worker_changeModel>(std::move(query), true));
+      TRY_STATUS_PROMISE(promise, change_model(obj->new_model_));
+      promise.set_value(cocoon::create_serialize_tl_object<cocoon_api::worker_changedModel>());
+      return;
+    }
     default:
       LOG(ERROR) << "dropping received query: received query with unknown magic " << td::format::as_hex(magic);
   }
@@ -477,6 +494,36 @@ void WorkerRunner::set_coefficient(td::int32 value) {
 
     send_message_to_connection(conn_id, cocoon::create_serialize_tl_object<cocoon_api::worker_newCoefficient>(value));
   });
+}
+
+td::Status WorkerRunner::change_model(std::string new_model) {
+  if (change_model_script_.size() == 0) {
+    return td::Status::Error(ton::ErrorCode::error, "cannot change model: no script in config");
+  } else if (!HAS_UNISTD) {
+    return td::Status::Error(ton::ErrorCode::error, "cannot change model: cannot exec");
+  } else {
+    if (check_image_hashes()) {
+      if (!runner_config() || !runner_config()->root_contract_config->has_model_hash(td::sha256_bits256(new_model))) {
+        return td::Status::Error(ton::ErrorCode::error, "cannot change model: unknown model");
+      }
+    }
+#if HAS_UNISTD
+    LOG(WARNING) << "changing model to " << new_model;
+    auto v = vfork();
+    if (!v) {
+      execl(change_model_script_.c_str(), change_model_script_.c_str(), new_model.c_str(), NULL);
+      _Exit(77);  // in case execl failed. In vform we can't really handle exec errors
+    } else {
+      int wstatus = 0;
+      auto r = waitpid(v, &wstatus, 0);
+      if (r < 0 || !WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0) {
+        return td::Status::Error(ton::ErrorCode::error, "cannot change model: model change script failed");
+      } else {
+        return td::Status::OK();
+      }
+    }
+#endif
+  }
 }
 
 /*

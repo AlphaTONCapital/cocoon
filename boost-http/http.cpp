@@ -11,6 +11,7 @@
 #include <thread>
 #include <vector>
 #include "http.h"
+#include "www-form-urlencoded.h"
 
 namespace cocoon {
 
@@ -125,23 +126,8 @@ class HttpSession : public std::enable_shared_from_this<HttpSession> {
     }
 
     std::vector<std::pair<std::string, std::string>> args_vec;
-    while (args.size() > 0) {
-      p = args.find('&');
-      std::string_view arg;
-      if (p != args.npos) {
-        arg = args.substr(0, p);
-        args = args.substr(p + 1);
-      } else {
-        arg = args;
-        args = "";
-      }
-
-      p = arg.find('=');
-      if (p != args.npos) {
-        args_vec.emplace_back(arg.substr(0, p), arg.substr(p + 1));
-      } else {
-        args_vec.emplace_back(arg, "");
-      }
+    if (args.size() > 0) {
+      args_vec = parse_x_www_form_urlencoded(td::Slice(args.begin(), args.end()));
     }
 
     class Cb : public HttpRequestCallback {

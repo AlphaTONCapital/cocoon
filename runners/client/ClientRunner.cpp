@@ -624,7 +624,7 @@ std::string ClientRunner::http_generate_json_stats() {
   {
     jb.start_object("stats");
     stats_->requests_received.to_jb(jb, "queries");
-    stats_->requests_failed.to_jb(jb, "success");
+    stats_->requests_success.to_jb(jb, "success");
     stats_->requests_failed.to_jb(jb, "failed");
     stats_->request_bytes_received.to_jb(jb, "bytes_received");
     stats_->answer_bytes_sent.to_jb(jb, "bytes_sent");

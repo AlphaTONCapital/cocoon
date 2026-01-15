@@ -869,8 +869,8 @@ static td::Status process_content_part_image(Ctx &ctx) {
 
 static td::Status process_content_part_audio(Ctx &ctx) {
   TRY_STATUS(ctx.process_obj_field("input_audio", true, [](Ctx &ctx) {
-    ctx.process_obj_field("format", true, process_string);
-    ctx.process_obj_field("data", true, process_string_b64);
+    TRY_STATUS(ctx.process_obj_field("format", true, process_string));
+    TRY_STATUS(ctx.process_obj_field("data", true, process_string_b64));
     return td::Status::OK();
   }));
   return td::Status::OK();
@@ -878,9 +878,9 @@ static td::Status process_content_part_audio(Ctx &ctx) {
 
 static td::Status process_content_part_file(Ctx &ctx) {
   TRY_STATUS(ctx.process_obj_field("file", true, [](Ctx &ctx) {
-    ctx.process_obj_field("file_data", false, process_string_b64);
-    ctx.process_obj_field("file_id", false, process_string);
-    ctx.process_obj_field("filename", false, process_string);
+    TRY_STATUS(ctx.process_obj_field("file_data", false, process_string_b64));
+    TRY_STATUS(ctx.process_obj_field("file_id", false, process_string));
+    TRY_STATUS(ctx.process_obj_field("filename", false, process_string));
     return td::Status::OK();
   }));
   return td::Status::OK();
