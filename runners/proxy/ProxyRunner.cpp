@@ -73,12 +73,16 @@ td::Result<std::shared_ptr<ProxyWorkerInfo>> ProxyRunner::register_worker(
 
 td::Result<std::shared_ptr<ProxyWorkerConnectionInfo>> ProxyRunner::register_worker_connection(
     std::shared_ptr<ProxyWorkerInfo> worker, TcpClient::ConnectionId connection_id, const td::Bits256 &worker_hash,
-    std::string model, td::int32 coefficient, td::int32 max_active_requests) {
+    std::string model, td::int32 coefficient, td::int32 max_active_requests, std::string machine_description_json) {
   if (is_disabled()) {
     return td::Status::Error(ton::ErrorCode::notready, "proxy is not participating in this iteration");
   }
-  auto worker_conn = std::make_shared<ProxyWorkerConnectionInfo>(worker, connection_id, worker_hash, model, coefficient,
-                                                                 max_active_requests, true);
+  if (machine_description_json == "") {
+    machine_description_json = "{}";
+  }
+  auto worker_conn =
+      std::make_shared<ProxyWorkerConnectionInfo>(worker, connection_id, worker_hash, model, coefficient,
+                                                  max_active_requests, true, std::move(machine_description_json));
   models_[worker_conn->model_name_base].model_base_name = worker_conn->model_name_base;
   auto it = models_[worker_conn->model_name_base].connections.emplace(connection_id, std::move(worker_conn)).first;
   return it->second;
@@ -1788,8 +1792,7 @@ std::string ProxyRunner::http_generate_main() {
         sb << "change model: <form method=\"post\" action=\"/request/change_worker_model\">\n"
            << "<input type=\"text\" id=\"new_model_name\" name=\"new_model_name\">\n"
            << "<input type=\"hidden\" id=\"connection_id\" name=\"connection_id\" value=\"" << it2.first << "\">\n"
-           << "<button type=\"submit\" id=\"change_worker_model\" name=\"change_worker_model\" value=\"1\">change "
-              "model</button>\n"
+           << "<input type=\"submit\" id=\"change_worker_model\" name=\"change_worker_model\" value=\"change model\">\n"
            << "</form></br>\n";
       }
     }

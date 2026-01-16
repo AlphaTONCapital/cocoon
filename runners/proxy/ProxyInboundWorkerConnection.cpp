@@ -90,7 +90,8 @@ void ProxyInboundWorkerConnection::receive_connect_to_proxy_query(td::BufferSlic
       promise, worker_connection_info_,
       runner()->register_worker_connection(
           worker_info_, connection_id(), remote_app_hash(), obj->params_->model_, obj->params_->coefficient_,
-          (obj->params_->max_active_requests_ + obj->params_->proxy_cnt_ - 1) / obj->params_->proxy_cnt_));
+          (obj->params_->max_active_requests_ + obj->params_->proxy_cnt_ - 1) / obj->params_->proxy_cnt_,
+          obj->params_->machine_description_json_));
 
   state_ = State::Compare;
   auto params = ton::create_tl_object<cocoon_api::proxy_params>(

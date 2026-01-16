@@ -13,5 +13,6 @@
   "connect_to_proxy_via": "127.0.0.1:8116",
   "forward_requests_to": "127.0.0.1:8000",
   "coefficient": "$WORKER_COEFFICIENT",
-  "max_active_requests": 60
+  "max_active_requests": 60,
+  "machine_description_json" : "{\"test\":true}"
 }

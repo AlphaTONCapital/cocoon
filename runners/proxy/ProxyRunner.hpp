@@ -46,7 +46,7 @@ class ProxyRunner : public BaseRunner {
     return 0;
   }
   static constexpr td::int32 max_proto_version() {
-    return 3;
+    return 4;
   }
 
   /* SIMPLE GETTERS */
@@ -88,7 +88,7 @@ class ProxyRunner : public BaseRunner {
   td::Result<std::shared_ptr<ProxyWorkerInfo>> register_worker(const block::StdAddress &worker_owner_address);
   td::Result<std::shared_ptr<ProxyWorkerConnectionInfo>> register_worker_connection(
       std::shared_ptr<ProxyWorkerInfo> worker, TcpClient::ConnectionId connection_id, const td::Bits256 &worker_hash,
-      std::string model, td::int32 coefficient, td::int32 max_active_requests);
+      std::string model, td::int32 coefficient, td::int32 max_active_requests, std::string machine_description_json);
   void unregister_worker_connection(std::shared_ptr<ProxyWorkerConnectionInfo> worker_connection_info);
   void sign_worker_payment(ProxyWorkerInfo &w);
   void on_worker_update(const block::StdAddress &worker_owner_address, const block::StdAddress &worker_sc_address,

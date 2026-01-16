@@ -69,7 +69,9 @@ workerRunner.config
   max_active_requests:int
   image_hash:int256
   http_access_hash:string 
-  change_model_script:string = workerRunner.Config;
+  change_model_script:string
+  machine_description_json:string
+  = workerRunner.Config;
 
 clientRunner.config
   is_test:Bool
@@ -190,6 +192,7 @@ worker.params#869c73ed flags:#
   max_active_requests:flags.0?int
   min_proto_version:flags.1?int
   max_proto_version:flags.1?int
+  machine_description_json:flags.2?string
   = worker.Params;
 
 proxy.params#d5c5609f flags:# 

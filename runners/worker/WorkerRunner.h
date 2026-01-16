@@ -34,10 +34,10 @@ class WorkerRunner : public BaseRunner {
     return to_nano(0.2);
   }
   static constexpr td::int32 min_proto_version() {
-    return 1;
+    return 3;
   }
   static constexpr td::int32 max_proto_version() {
-    return 3;
+    return 4;
   }
 
   /* SIMPLE GETTERS */
@@ -61,6 +61,9 @@ class WorkerRunner : public BaseRunner {
   }
   auto max_active_requests() const {
     return max_active_requests_;
+  }
+  const auto &machine_description_json() const {
+    return machine_description_json_;
   }
 
   /* SIMPLE SETTERS */
@@ -217,6 +220,7 @@ class WorkerRunner : public BaseRunner {
   td::Bits256 local_image_hash_unverified_;
 
   std::string change_model_script_;
+  std::string machine_description_json_;
 };
 
 }  // namespace cocoon

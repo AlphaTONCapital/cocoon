@@ -7,6 +7,7 @@
 #include "cocoon-tl-utils/cocoon-tl-utils.hpp"
 #include "common/bitstring.h"
 #include "errorcode.h"
+#include "nlohmann/json_fwd.hpp"
 #include "runners/helpers/HttpSender.hpp"
 
 #include "git.h"
@@ -137,6 +138,14 @@ void WorkerRunner::load_config(td::Promise<td::Unit> promise) {
     }
 
     change_model_script_ = conf.change_model_script_;
+    machine_description_json_ = conf.machine_description_json_;
+
+    if (machine_description_json_.size() == 0) {
+      machine_description_json_ = "{}";
+    }
+
+    auto r = nlohmann::json::parse(machine_description_json_);
+    CHECK(r.is_object());
 
     return td::Status::OK();
   }();
