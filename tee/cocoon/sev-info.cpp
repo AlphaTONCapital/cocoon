@@ -174,6 +174,7 @@ int main(int argc, char **argv) {
     sev::TrustChainManager manager(
         td::SharedValue<std::shared_ptr<std::unordered_map<sev::ProductName, sev::TrustChain>>>(
             std::make_shared<std::unordered_map<sev::ProductName, sev::TrustChain>>(std::move(trust_chains))));
+
     TRY_STATUS(manager.verify_cert(product_name, cert.native_handle()));
     LOG(INFO) << "VCEK successfully verified";
 
