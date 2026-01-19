@@ -76,10 +76,6 @@ sev_info_extract_url() {
   sev_info_filter_color "$(printf "%s" "$1" | head -n 1 | awk -F'URL: ' '{printf $2}')"
 }
 
-sev_info_product_name() {
-  sev_info_filter_color "$(sev-info --print-this-cpu-product-name 2>&1 | head -n 1 | awk -F'CPU: ' '{print $2}')"
-}
-
 sev_info_all_product_names() {
   sev_info_filter_color "$(sev-info --print-all-products 2>&1 | awk -F'ProductName: ' '{print $2}' ORS=' ')"
 }
@@ -116,7 +112,6 @@ init_sev_pki() {
     mv -T "${product_cert_chain_pem}.next" ${product_cert_chain_pem}
     mv -T "${product_cert_chain_crl_pem}.next" ${product_cert_chain_crl_pem}
   done
-
 }
 
 init_sev_pki_vcek() {
