@@ -11,6 +11,7 @@
 #include "td/utils/UInt.h"
 #include "td/utils/base64.h"
 #include "tee/cocoon/tdx/tdx.h"
+#include "tee/cocoon/sev/GuestDevice.h"
 #include "tee/cocoon/tdx/eventlog.h"
 #include "git.h"
 #include <sstream>
@@ -323,6 +324,48 @@ std::string get_metrics() {
 }
 
 }  // namespace render_gpu
+
+namespace render_sev {
+
+std::string get_status() {
+  std::ostringstream out;
+  out << "=== SEV STATUS ===\n\n";
+
+  out << "Build:\n";
+  out << "  Commit:  " << GitMetadata::CommitSHA1() << "\n";
+  out << "  Date:    " << GitMetadata::CommitDate() << "\n";
+  out << "  Message: " << GitMetadata::CommitSubject() << "\n\n";
+
+  auto image_hash = read_image_hash();
+  out << "Image Hash: " << image_hash << "\n\n";
+
+  auto maybe_guest_device = sev::GuestDevice::open();
+  if (maybe_guest_device.is_error()) {
+    out << "Error opening SEV GuestDevice: " << (PSTRING() << maybe_guest_device.error()) << "\n";
+  } else {
+    auto guest_device = maybe_guest_device.move_as_ok();
+    auto maybe_report = guest_device.get_report();
+    if (maybe_report.is_error()) {
+      out << "Error getting SEV report: " << (PSTRING() << maybe_report.error()) << "\n";
+    } else {
+      out << "Attestation Data:\n";
+      out << (PSTRING() << maybe_report.ok());
+
+      std::string calculated = td::base64_encode(maybe_report.ok().measurement.as_slice());
+      out << "\nVerification\n";
+
+      if (image_hash == calculated) {
+        out << "  Image hash: + VERIFIED\n";
+      } else if () {
+        out << "  Image hash: - MISMATCH (stored != calculated) (" << image_hash << " != " << calculated << ")\n";
+      }
+    }
+  }
+
+  return out.str();
+}
+
+}  // namespace render_sev
 
 // ============================================================================
 // Service Rendering
