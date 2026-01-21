@@ -160,6 +160,7 @@ class TrustChainManager {
   td::Status verify_cert(ProductName product_name, X509 *x509) const;
 
  private:
+  td::Timestamp loaded_at_{td::Timestamp::now()};
   td::SharedValue<std::shared_ptr<std::unordered_map<ProductName, TrustChain>>> trust_chains_;
 };
 

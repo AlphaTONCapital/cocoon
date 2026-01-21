@@ -174,7 +174,7 @@ td::Status parse_certificate(X509_STORE* store, td::Slice path) {
 
 td::Result<openssl_ptr<STACK_OF(X509_CRL), STACK_OF_X509_CRL_free>> read_crl(td::Slice path) {
   TRY_RESULT(stat, td::stat(path.str()));
-  if (stat.mtime_nsec_ + 3 * 86400 < static_cast<td::uint64>(td::Clocks::system())) {
+  if ((stat.mtime_nsec_ + 3 * 86400) < static_cast<td::uint64>(td::Clocks::system())) {
     return td::Status::Error(PSTRING() << path << " is outdated");
   }
 
@@ -505,8 +505,8 @@ td::Result<TrustChainManager> TrustChainManager::make(td::actor::Scheduler* sche
     LOG(INFO) << "Starting AMD SEV TrustChainUpdater";
 
     scheduler->run_in_context([&] {
-      td::actor::create_actor<TrustChainUpdater>(
-          "TrustChainUpdater", TrustChainUpdater::Config(PKI_ROOT_DIR.str(), std::move(shared_trust_chains)))
+      td::actor::create_actor<TrustChainUpdater>("TrustChainUpdater",
+                                                 TrustChainUpdater::Config(PKI_ROOT_DIR.str(), shared_trust_chains))
           .release();
     });
   }
@@ -515,6 +515,11 @@ td::Result<TrustChainManager> TrustChainManager::make(td::actor::Scheduler* sche
 }
 
 td::Status TrustChainManager::verify_cert(ProductName product_name, X509* x509) const {
+  constexpr size_t kRefreshThreshold = 14 * 86400;
+  if (td::Timestamp::in(kRefreshThreshold, loaded_at_).is_in_past()) {
+    return td::Status::Error("TrustChain CRL outdated");
+  }
+
   auto trust_chains = trust_chains_.load();
   auto found = trust_chains->find(product_name);
   if (found == trust_chains->end()) {
