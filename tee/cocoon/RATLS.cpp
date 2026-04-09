@@ -293,7 +293,7 @@ class RATLSVerifier {
         continue;
       }
 
-      return td::Status::Error(PSLICE() << "Unkown critical oid=" << oid);
+      return td::Status::Error(PSLICE() << "Unknown critical oid=" << oid);
     }
 
     if (has_tdx_extensions && has_sev_extensions) {
