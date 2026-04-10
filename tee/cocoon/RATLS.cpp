@@ -42,7 +42,7 @@ class DefaultPolicy : public RATLSPolicy {
       return tdx::RATLSAttestationReport{};
     }
 
-    return td::Status::Error("No extensions present and allowed image hashes isn't empty");
+    return td::Status::Error("No extensions present and allowed image hashes aren't empty");
   }
 
   td::Result<RATLSAttestationReport> validate(const tde2e_core::PublicKey &public_key,
@@ -465,6 +465,10 @@ class CachedRATLSInterface : public RATLSInterface {
 };
 
 }  // namespace
+
+td::Result<RATLSAttestationReport> RATLSPolicy::validate(const tde2e_core::PublicKey &public_key) const {
+  return td::Status::Error("No extensions present and allowed image hashes aren't empty");
+}
 
 td::UInt512 hash_public_key(const tde2e_core::PublicKey &public_key) {
   td::UInt512 hash;
