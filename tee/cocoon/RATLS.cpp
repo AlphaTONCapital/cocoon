@@ -35,6 +35,16 @@ class DefaultPolicy : public RATLSPolicy {
       : ratls_(std::move(ratls)), config_(std::move(config)) {
   }
 
+  td::Result<RATLSAttestationReport> validate(const tde2e_core::PublicKey &public_key) const override {
+    // This is the special case when no expected extensions are present by client side
+    if (config_.tdx_config.allowed_image_hashes.empty() && config_.sev_config.allowed_image_hashes.empty()) {
+      // Just treat at tdx attestation report
+      return tdx::RATLSAttestationReport{};
+    }
+
+    return td::Status::Error("No extensions present and allowed image hashes isn't empty");
+  }
+
   td::Result<RATLSAttestationReport> validate(const tde2e_core::PublicKey &public_key,
                                               const tdx::RATLSExtensions &extensions) const override {
     // If there is no ratls interface, this is the "any" policy: allow without attestation
@@ -323,7 +333,7 @@ class RATLSVerifier {
 
       TRY_STATUS(policy_->validate(public_key, extensions));
 
-      return td::Status::OK ();
+      return td::Status::OK();
     }
 
     if (has_sev_extensions) {
@@ -338,7 +348,9 @@ class RATLSVerifier {
       return td::Status::OK();
     }
 
-    return td::Status::Error("Neither TDX  or SEV extension");
+    TRY_STATUS(policy_->validate(public_key));
+
+    return td::Status::OK();
   }
 
  private:

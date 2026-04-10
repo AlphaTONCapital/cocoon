@@ -233,6 +233,7 @@ class RATLSPolicy {
  public:
   virtual ~RATLSPolicy() = default;
 
+  virtual td::Result<RATLSAttestationReport> validate(const tde2e_core::PublicKey& public_key) const;
   virtual td::Result<RATLSAttestationReport> validate(const tde2e_core::PublicKey& public_key,
                                                       const tdx::RATLSExtensions& extensions) const = 0;
   virtual td::Result<RATLSAttestationReport> validate(const tde2e_core::PublicKey& public_key,
