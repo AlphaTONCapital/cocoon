@@ -603,7 +603,16 @@ RATLSPolicyRef RATLSPolicy::make(RATLSInterfaceRef ratls, RATLSPolicyConfig conf
 }
 
 td::Result<RATLSAttestationReport> RATLSPolicyHelper::validate(const tde2e_core::PublicKey &public_key) const {
-  return policy_->validate(public_key);
+  auto maybe_report = policy_->validate(public_key);
+  if (maybe_report.is_error()) {
+    promise_.set_error(maybe_report.error().clone());
+    return maybe_report.move_as_error();
+  }
+
+  auto report = maybe_report.move_as_ok();
+  promise_.set_value(make_peer_info(public_key, report));
+
+  return report;
 }
 
 td::Result<RATLSAttestationReport> RATLSPolicyHelper::validate(const tde2e_core::PublicKey &public_key,
