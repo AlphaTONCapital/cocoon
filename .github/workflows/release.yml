@@ -1,0 +1,139 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'prod or test'
+        default: prod
+        type: choice
+        options: [prod, test]
+      create_release:
+        description: 'Create GitHub release (only for tags or explicit opt-in)'
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: [self-hosted, linux, tdx-attestation]
+    timeout-minutes: 360
+    env:
+      BUILD_TYPE: ${{ inputs.build_type || 'prod' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          clean: true
+
+      - name: Check TDX prerequisites
+        run: |
+          set -e
+          test -e /dev/kvm || { echo "ERR: /dev/kvm not available" >&2; exit 1; }
+          test -e /dev/tdx_guest -o -e /sys/module/kvm_intel/parameters/tdx \
+            || echo "WARN: TDX device not obvious; extract-image-hash may fail"
+
+      - name: Build TEE image
+        run: ./scripts/build-image "$BUILD_TYPE"
+
+      - name: Ensure seal-server is running
+        id: seal
+        run: |
+          set -e
+          BIN="images/${BUILD_TYPE}/host-bin"
+          if pgrep -x seal-server >/dev/null; then
+              echo "Using existing seal-server (pid=$(pgrep -x seal-server))"
+              echo "started_by_ci=false" >> "$GITHUB_OUTPUT"
+          else
+              echo "Starting seal-server from $BIN"
+              nohup "$BIN/seal-server" \
+                  --enclave-path "$BIN/enclave.signed.so" \
+                  > seal-server.log 2>&1 &
+              echo $! > seal-server.pid
+              echo "started_by_ci=true" >> "$GITHUB_OUTPUT"
+              sleep 3
+              if ! kill -0 "$(cat seal-server.pid)" 2>/dev/null; then
+                  echo "ERR: seal-server failed to start" >&2
+                  tail -n 40 seal-server.log >&2
+                  exit 1
+              fi
+          fi
+
+      - name: Compute file checksums
+        working-directory: images/${{ env.BUILD_TYPE }}
+        run: |
+          sha256sum OVMF.fd image.vmlinuz image.initrd image.cmdline image.img \
+            | tee sha256sums.txt
+
+      - name: Extract TEE image_hash per role
+        run: |
+          set -e
+          : > MEASUREMENTS.txt
+          echo "# COCOON TEE image_hash per role" >> MEASUREMENTS.txt
+          echo "# Build: ${GITHUB_REF_NAME}@${GITHUB_SHA}" >> MEASUREMENTS.txt
+          echo "# Build type: ${BUILD_TYPE}" >> MEASUREMENTS.txt
+          echo "# Generated: $(date -u +%FT%TZ)" >> MEASUREMENTS.txt
+          echo "" >> MEASUREMENTS.txt
+
+          for role in worker proxy key-manager; do
+              echo "=== Extracting image_hash for role: $role ==="
+              hash=$(./scripts/extract-image-hash "images/${BUILD_TYPE}" "spec/spec-${role}")
+              echo "${role}=${hash}" | tee -a MEASUREMENTS.txt
+          done
+
+      - name: Pack distribution tarball
+        run: |
+          OUT="cocoon-tee-${BUILD_TYPE}-${GITHUB_REF_NAME}.tar.xz"
+          tar -cJf "$OUT" -C "images/${BUILD_TYPE}" .
+          sha256sum "$OUT" | tee -a "images/${BUILD_TYPE}/sha256sums.txt"
+          echo "ARTIFACT_NAME=$OUT" >> "$GITHUB_ENV"
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            images/${{ env.BUILD_TYPE }}/OVMF.fd
+            images/${{ env.BUILD_TYPE }}/image.vmlinuz
+            images/${{ env.BUILD_TYPE }}/image.initrd
+            images/${{ env.BUILD_TYPE }}/image.cmdline
+            images/${{ env.BUILD_TYPE }}/image.img
+            ${{ env.ARTIFACT_NAME }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cocoon-release-${{ env.BUILD_TYPE }}-${{ github.ref_name }}
+          path: |
+            ${{ env.ARTIFACT_NAME }}
+            MEASUREMENTS.txt
+            images/${{ env.BUILD_TYPE }}/sha256sums.txt
+          retention-days: 30
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.ARTIFACT_NAME }}
+            MEASUREMENTS.txt
+            images/${{ env.BUILD_TYPE }}/sha256sums.txt
+          body_path: MEASUREMENTS.txt
+          generate_release_notes: true
+
+      - name: Stop seal-server (if started by CI)
+        if: always() && steps.seal.outputs.started_by_ci == 'true'
+        run: |
+          if [[ -f seal-server.pid ]]; then
+              PID=$(cat seal-server.pid)
+              kill -TERM "$PID" 2>/dev/null || true
+              for _ in $(seq 1 10); do
+                  kill -0 "$PID" 2>/dev/null || break
+                  sleep 1
+              done
+              kill -KILL "$PID" 2>/dev/null || true
+              rm -f seal-server.pid
+          fi
