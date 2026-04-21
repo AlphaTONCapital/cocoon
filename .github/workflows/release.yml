@@ -175,6 +175,17 @@ jobs:
           body_path: MEASUREMENTS.txt
           generate_release_notes: true
 
+      - name: Dump CI seal-server log
+        if: always()
+        run: |
+          if [[ -f seal-server.log ]]; then
+              echo "--- seal-server.log (last 200 lines) ---"
+              tail -n 200 seal-server.log
+              echo "--- end seal-server.log ---"
+          else
+              echo "seal-server.log not found"
+          fi
+
       - name: Stop CI seal-server
         if: always()
         run: |
