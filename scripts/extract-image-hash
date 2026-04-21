@@ -1,0 +1,109 @@
+#!/bin/bash
+# extract-image-hash - Boot TEE image briefly under TDX and extract TEE_IMAGE_HASH
+#
+# Usage: extract-image-hash <image_dir> <spec_dir>
+#
+# Prints the role-specific TEE image_hash (base64, as registered in the TON
+# root contract) on stdout. The hash depends on both the image binaries and
+# the spec dir contents (spec.tree is extended into RTMR3 before attestation).
+#
+# Requires:
+#   - Host with Intel TDX available (/dev/tdx_guest, KVM with TDX support)
+#   - seal-server running on host (vsock port 4060 by default) — the guest's
+#     cocoon-init-tdx calls seal-client before the measurement is finalized.
+#   - qemu-system-x86_64 with TDX support
+#
+set -euo pipefail
+
+usage() {
+    echo "Usage: $0 <image_dir> <spec_dir>" >&2
+    echo "" >&2
+    echo "Example:" >&2
+    echo "  $0 images/prod spec/spec-worker" >&2
+    exit 1
+}
+
+[[ $# -eq 2 ]] || usage
+
+IMAGE_DIR="$(cd "$1" && pwd)"
+SPEC_DIR="$(cd "$2" && pwd)"
+
+for f in image.img image.vmlinuz image.initrd image.cmdline OVMF.fd; do
+    [[ -f "$IMAGE_DIR/$f" ]] || { echo "ERR: missing $IMAGE_DIR/$f" >&2; exit 1; }
+done
+[[ -d "$SPEC_DIR" ]] || { echo "ERR: spec dir not found: $SPEC_DIR" >&2; exit 1; }
+
+WORK="$(mktemp -d -t cocoon-extract-XXXXXX)"
+QEMU_PID=""
+
+cleanup() {
+    if [[ -n "$QEMU_PID" ]] && kill -0 "$QEMU_PID" 2>/dev/null; then
+        kill -TERM "$QEMU_PID" 2>/dev/null || true
+        for _ in $(seq 1 20); do
+            kill -0 "$QEMU_PID" 2>/dev/null || break
+            sleep 0.5
+        done
+        kill -KILL "$QEMU_PID" 2>/dev/null || true
+    fi
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+truncate --size=1G "$WORK/persistent.img"
+
+CMDLINE="$(cat "$IMAGE_DIR/image.cmdline") cocoon_fake_ton modprobe.blacklist=nvidia"
+
+CID="${COCOON_EXTRACT_CID:-99}"
+
+SERIAL_LOG="$WORK/serial.log"
+: > "$SERIAL_LOG"
+
+echo ">>> Booting TDX VM (CID=$CID, spec=$(basename "$SPEC_DIR"))" >&2
+
+qemu-system-x86_64 \
+    -machine q35,kernel-irqchip=split,confidential-guest-support=tdx,memory-backend=mem0 \
+    -bios "$IMAGE_DIR/OVMF.fd" \
+    -accel kvm -cpu host -smp 4 \
+    -vga none -nographic \
+    -object '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}' \
+    -object memory-backend-ram,id=mem0,size=4G \
+    -device "vhost-vsock-pci,guest-cid=${CID}" \
+    -object iommufd,id=iommufd0 \
+    -device pcie-root-port,id=pci.0,bus=pcie.0 \
+    -drive "cache=writeback,file=${IMAGE_DIR}/image.img,readonly=on,id=drive1,if=none,index=1,werror=report" \
+    -device virtio-blk-pci,bootindex=1,drive=drive1,serial=root \
+    -drive "cache=writeback,file=${WORK}/persistent.img,format=raw,id=drive2,if=none,index=2,werror=report" \
+    -device virtio-blk-pci,bootindex=2,drive=drive2,serial=persistent \
+    -chardev "file,id=char0,path=${SERIAL_LOG}" \
+    -device virtio-serial-pci,id=virtio-serial0 \
+    -device virtconsole,chardev=char0 \
+    -kernel "$IMAGE_DIR/image.vmlinuz" \
+    -initrd "$IMAGE_DIR/image.initrd" \
+    -append "$CMDLINE" \
+    -virtfs "local,path=${SPEC_DIR},mount_tag=spec,security_model=mapped,readonly=on" \
+    -net nic,netdev=user.0,model=virtio \
+    -netdev user,id=user.0 \
+    -serial null -monitor null \
+    &
+QEMU_PID=$!
+
+DEADLINE=$(( $(date +%s) + 360 ))
+while (( $(date +%s) < DEADLINE )); do
+    if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+        echo "ERR: qemu exited before producing TEE_IMAGE_HASH" >&2
+        echo "--- last 80 lines of serial log ---" >&2
+        tail -n 80 "$SERIAL_LOG" >&2 || true
+        exit 1
+    fi
+    HASH=$(grep -oE 'TEE_IMAGE_HASH: [A-Za-z0-9+/=]+' "$SERIAL_LOG" 2>/dev/null | head -n1 | awk '{print $2}')
+    if [[ -n "${HASH:-}" ]]; then
+        echo "$HASH"
+        exit 0
+    fi
+    sleep 2
+done
+
+echo "ERR: timed out after 6 min waiting for TEE_IMAGE_HASH" >&2
+echo "--- last 80 lines of serial log ---" >&2
+tail -n 80 "$SERIAL_LOG" >&2 || true
+exit 1
