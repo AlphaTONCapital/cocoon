@@ -95,7 +95,7 @@ while (( $(date +%s) < DEADLINE )); do
         tail -n 80 "$SERIAL_LOG" >&2 || true
         exit 1
     fi
-    HASH=$(grep -oE 'TEE_IMAGE_HASH: [A-Za-z0-9+/=]+' "$SERIAL_LOG" 2>/dev/null | head -n1 | awk '{print $2}')
+    HASH=$(grep -oE 'TEE_IMAGE_HASH: [A-Za-z0-9+/=]+' "$SERIAL_LOG" 2>/dev/null | head -n1 | awk '{print $2}' || true)
     if [[ -n "${HASH:-}" ]]; then
         echo "$HASH"
         exit 0
