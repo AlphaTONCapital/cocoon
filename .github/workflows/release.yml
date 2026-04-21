@@ -32,12 +32,17 @@ permissions:
   id-token: write
   attestations: write
 
+concurrency:
+  group: release-seal-server
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: [self-hosted, linux, tdx-attestation]
     timeout-minutes: 360
     env:
       BUILD_TYPE: ${{ inputs.build_type || 'prod' }}
+      COCOON_EXTRACT_SEAL_PORT: '12346'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,27 +65,42 @@ jobs:
           fi
           ./scripts/build-image $FAST "$BUILD_TYPE"
 
-      - name: Ensure seal-server is running
+      - name: Start CI seal-server (own enclave, isolated vsock port)
         id: seal
         run: |
           set -e
           BIN="images/${BUILD_TYPE}/host-bin"
-          if pgrep -x seal-server >/dev/null; then
-              echo "Using existing seal-server (pid=$(pgrep -x seal-server))"
-              echo "started_by_ci=false" >> "$GITHUB_OUTPUT"
-          else
-              echo "Starting seal-server from $BIN"
-              nohup "$BIN/seal-server" \
-                  --enclave-path "$BIN/enclave.signed.so" \
-                  > seal-server.log 2>&1 &
-              echo $! > seal-server.pid
-              echo "started_by_ci=true" >> "$GITHUB_OUTPUT"
-              sleep 3
-              if ! kill -0 "$(cat seal-server.pid)" 2>/dev/null; then
-                  echo "ERR: seal-server failed to start" >&2
-                  tail -n 40 seal-server.log >&2
-                  exit 1
-              fi
+
+          # Acquire host-wide lock to prevent concurrent CI runs from
+          # racing on the same vsock port.
+          LOCK_FILE=/tmp/cocoon-ci-seal.lock
+          touch "$LOCK_FILE"
+          exec {LOCK_FD}>"$LOCK_FILE"
+          if ! flock -n "$LOCK_FD"; then
+              echo "Another CI job is using seal-server; waiting..."
+              flock "$LOCK_FD"
+          fi
+          echo "seal_lock_fd=$LOCK_FD" >> "$GITHUB_OUTPUT"
+
+          # Kill any leftover CI seal-server on our port from a prior failed run.
+          if pgrep -f "seal-server.*--port ${COCOON_EXTRACT_SEAL_PORT}" >/dev/null; then
+              echo "Killing leftover CI seal-server on port ${COCOON_EXTRACT_SEAL_PORT}"
+              pkill -TERM -f "seal-server.*--port ${COCOON_EXTRACT_SEAL_PORT}" || true
+              sleep 2
+              pkill -KILL -f "seal-server.*--port ${COCOON_EXTRACT_SEAL_PORT}" 2>/dev/null || true
+          fi
+
+          echo "Starting CI seal-server on vsock port ${COCOON_EXTRACT_SEAL_PORT} (prod unaffected on 12345)"
+          nohup "$BIN/seal-server" \
+              --port "${COCOON_EXTRACT_SEAL_PORT}" \
+              --enclave-path "$BIN/enclave.signed.so" \
+              > seal-server.log 2>&1 &
+          echo $! > seal-server.pid
+          sleep 3
+          if ! kill -0 "$(cat seal-server.pid)" 2>/dev/null; then
+              echo "ERR: CI seal-server failed to start" >&2
+              tail -n 40 seal-server.log >&2
+              exit 1
           fi
 
       - name: Compute file checksums
@@ -155,8 +175,8 @@ jobs:
           body_path: MEASUREMENTS.txt
           generate_release_notes: true
 
-      - name: Stop seal-server (if started by CI)
-        if: always() && steps.seal.outputs.started_by_ci == 'true'
+      - name: Stop CI seal-server
+        if: always()
         run: |
           if [[ -f seal-server.pid ]]; then
               PID=$(cat seal-server.pid)
@@ -168,3 +188,5 @@ jobs:
               kill -KILL "$PID" 2>/dev/null || true
               rm -f seal-server.pid
           fi
+          # Sweep any stray CI seal-server on our port
+          pkill -TERM -f "seal-server.*--port ${COCOON_EXTRACT_SEAL_PORT}" 2>/dev/null || true

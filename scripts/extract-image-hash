@@ -9,8 +9,10 @@
 #
 # Requires:
 #   - Host with Intel TDX available (/dev/tdx_guest, KVM with TDX support)
-#   - seal-server running on host (vsock port 4060 by default) — the guest's
-#     cocoon-init-tdx calls seal-client before the measurement is finalized.
+#   - seal-server running on host vsock port COCOON_EXTRACT_SEAL_PORT (default
+#     12346) — CI starts its own so it coexists with production seal-server on
+#     the default 12345. The guest's cocoon-init-tdx reads cocoon_seal_port
+#     from /proc/cmdline and passes it to seal-client.
 #   - qemu-system-x86_64 with TDX support
 #
 set -euo pipefail
@@ -51,7 +53,8 @@ trap cleanup EXIT
 
 truncate --size=1G "$WORK/persistent.img"
 
-CMDLINE="$(cat "$IMAGE_DIR/image.cmdline") cocoon_fake_ton modprobe.blacklist=nvidia"
+SEAL_PORT="${COCOON_EXTRACT_SEAL_PORT:-12346}"
+CMDLINE="$(cat "$IMAGE_DIR/image.cmdline") cocoon_fake_ton cocoon_seal_port=${SEAL_PORT} modprobe.blacklist=nvidia"
 
 CID="${COCOON_EXTRACT_CID:-99}"
 
