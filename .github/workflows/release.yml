@@ -65,6 +65,37 @@ jobs:
           fi
           ./scripts/build-image $FAST "$BUILD_TYPE"
 
+      - name: Rebuild seal-server natively against host DCAP
+        run: |
+          # The mkosi-built seal-server links against the SGX DCAP version
+          # bundled in reprodebian's local repo, which can differ from the
+          # host's DCAP. Struct sizes like sgx_ql_qv_supplemental_t grew
+          # between versions; loading a chroot-built seal-server against
+          # host DCAP 1.25+ produces runtime ABI mismatches.
+          #
+          # Recompile only the host-side seal-server natively so it links
+          # against the exact libraries it'll use at runtime. enclave.signed.so
+          # is left alone — its MR_ENCLAVE is baked into the TEE image at
+          # /usr/share/cocoon/mr_enclave.txt and must stay identical to what
+          # the guest was built to trust.
+          set -e
+          cmake -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DTON_USE_JEMALLOC=ON \
+              -DTON_USE_ABSEIL=OFF \
+              -DTON_ONLY_TONLIB=ON \
+              -DTON_USE_ROCKSDB=ON \
+              -S . -B build-host
+          cmake --build build-host --target seal-server -j"$(nproc)"
+
+          NATIVE="build-host/tee/cocoon/tdx/sgx-enclave/seal-server"
+          test -x "$NATIVE" || { echo "ERR: native seal-server not built at $NATIVE" >&2; exit 1; }
+          cp "$NATIVE" "images/${BUILD_TYPE}/host-bin/seal-server"
+          echo "Replaced chroot-built seal-server with native build:"
+          file "images/${BUILD_TYPE}/host-bin/seal-server"
+          ldd "images/${BUILD_TYPE}/host-bin/seal-server" | grep -E "dcap|sgx" || true
+
       - name: Start CI seal-server (own enclave, isolated vsock port)
         id: seal
         run: |
